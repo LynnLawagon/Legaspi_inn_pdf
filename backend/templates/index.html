@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Guest Data</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+</head>
+<body>
+
+<div class="hero">
+  <div id="drop-area">
+    <!-- ✅ accept pdf too -->
+    <input type="file" id="input-file" accept="image/*,application/pdf" style="display:none;" />
+    <div id="img-view">
+      <img id="preview-img" src="{{ url_for('static', filename='img/upload.png') }}" alt="Preview"/>
+      <video id="camera" autoplay></video>
+
+      <!-- ✅ ONLY ONE snap button -->
+      <button id="snap-btn" type="button">Snap</button>
+
+      <div id="loading-indicator">Scanning...</div>
+      <p id="drop-text">Upload your ID here</p>
+      <span>Supports School ID or National ID</span>
+    </div>
+  </div>
+
+  <div id="ocr-results">
+    <h2>Results</h2>
+
+    <div class="form-group"><label>ID Type:</label><input id="id-type"/></div>
+    <div class="form-group"><label>First Name:</label><input id="first-name"/></div>
+    <div class="form-group"><label>Middle Name:</label><input id="middle-name"/></div>
+    <div class="form-group"><label>Last Name:</label><input id="last-name"/></div>
+    <div class="form-group"><label>Date of Birth:</label><input id="dob" placeholder="YYYY-MM-DD"/></div>
+    <div class="form-group"><label>Gender:</label><input id="gender"/></div>
+    <div class="form-group"><label>Contact:</label><input id="contact"/></div>
+    <div class="form-group"><label>Address:</label><input id="address"/></div>
+
+    <button id="toggle-btn" type="button">Use Camera</button>
+
+    <!-- ✅ Export uses POST now -->
+    <button id="export-btn" type="button">Export PDF</button>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
