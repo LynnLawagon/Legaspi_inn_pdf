@@ -1,6 +1,7 @@
-easyocr==1.6.2
-matplotlib==3.6.2
-opencv-python-headless==4.5.4.60
 flask
-numpy<2
-pillow
+easyocr
+opencv-python-headless
+numpy
+reportlab
+pillow<10
+pymupdf

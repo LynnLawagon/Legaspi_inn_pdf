@@ -26,6 +26,35 @@ let cameraActive = false;
 let stream = null;
 let currentImgPath = "";
 
+// -----------------------------
+// Teachable Machine (lazy load)
+// -----------------------------
+let tmModel = null;
+let tmLoadingPromise = null;
+
+async function ensureTM() {
+  if (tmModel) return tmModel;
+  if (!tmLoadingPromise) {
+    const URL = "/static/my_model/";
+    tmLoadingPromise = tmImage
+      .load(URL + "model.json", URL + "metadata.json")
+      .then((m) => (tmModel = m));
+  }
+  return tmLoadingPromise;
+}
+
+async function predictIDType(imgEl) {
+  const model = await ensureTM(); // loads only first time
+  const prediction = await model.predict(imgEl);
+  const best = prediction.reduce((a, b) =>
+    a.probability > b.probability ? a : b
+  );
+  return best.className;
+}
+
+// -----------------------------
+// Helpers
+// -----------------------------
 async function fetchJSON(url, options) {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -39,14 +68,17 @@ async function fetchJSON(url, options) {
   }
 
   if (!res.ok) {
-    throw new Error((data.error || "Request failed") + (data.details ? " | " + data.details : ""));
+    throw new Error(
+      (data.error || "Request failed") + (data.details ? " | " + data.details : "")
+    );
   }
   return data;
 }
 
-// ✅ local compute preview for age/minor (based on current DOB field)
 function computeAgeAndMinor(dobStr) {
-  if (!dobStr || !/^\d{4}-\d{2}-\d{2}$/.test(dobStr)) return { age: "", status: "UNKNOWN" };
+  if (!dobStr || !/^\d{4}-\d{2}-\d{2}$/.test(dobStr)) {
+    return { age: "", status: "UNKNOWN" };
+  }
 
   const [y, m, d] = dobStr.split("-").map(Number);
   const dob = new Date(y, m - 1, d);
@@ -54,8 +86,9 @@ function computeAgeAndMinor(dobStr) {
 
   const today = new Date();
   let age = today.getFullYear() - dob.getFullYear();
+
   const hasHadBirthday =
-    (today.getMonth() > dob.getMonth()) ||
+    today.getMonth() > dob.getMonth() ||
     (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate());
 
   if (!hasHadBirthday) age--;
@@ -99,35 +132,57 @@ function updateFields(data, imgSrc) {
   cameraActive = false;
 }
 
+// -----------------------------
 // Click upload area to upload
+// -----------------------------
 document.getElementById("img-view").addEventListener("click", () => {
   if (!cameraActive) inputFile.click();
 });
 
-// Upload
+// -----------------------------
+// Upload -> /upload (FIXED)
+// -----------------------------
 inputFile.addEventListener("change", async () => {
   const file = inputFile.files[0];
   if (!file) return;
 
   loading.style.display = "flex";
+  loading.textContent = "Scanning...";
+
+  const imgSrc = URL.createObjectURL(file);
 
   try {
-    const isImage = file.type.startsWith("image/");
-    const imgSrc = isImage ? URL.createObjectURL(file) : "";
+    // Predict ID type ONLY if it's an image
+    let predictedType = "";
+    if (file.type.startsWith("image/")) {
+      loading.textContent = "Loading model...";
+      const img = new Image();
+      img.src = imgSrc;
+      await new Promise((r) => (img.onload = r));
+      predictedType = await predictIDType(img);
+      loading.textContent = "Scanning...";
+    }
 
     const formData = new FormData();
     formData.append("file", file);
 
     const data = await fetchJSON("/upload", { method: "POST", body: formData });
+
+    // Inject predicted ID type
+    if (predictedType) data.ID_type = predictedType;
+
     updateFields(data, imgSrc);
   } catch (err) {
     alert("Error scanning upload: " + err.message);
   } finally {
     loading.style.display = "none";
+    loading.textContent = "Scanning...";
   }
 });
 
+// -----------------------------
 // Toggle camera
+// -----------------------------
 toggleBtn.addEventListener("click", () => {
   cameraActive = !cameraActive;
 
@@ -149,7 +204,8 @@ toggleBtn.addEventListener("click", () => {
 });
 
 function startCamera() {
-  navigator.mediaDevices.getUserMedia({ video: true })
+  navigator.mediaDevices
+    .getUserMedia({ video: true })
     .then((s) => {
       stream = s;
       camera.srcObject = s;
@@ -166,7 +222,9 @@ function stopCamera() {
   }
 }
 
-// Snap
+// -----------------------------
+// Snap -> /scan (with TM prediction)
+// -----------------------------
 snapBtn.addEventListener("click", async (e) => {
   e.stopPropagation();
 
@@ -176,6 +234,7 @@ snapBtn.addEventListener("click", async (e) => {
   }
 
   loading.style.display = "flex";
+  loading.textContent = "Scanning...";
 
   const cvs = document.createElement("canvas");
   cvs.width = camera.videoWidth;
@@ -184,27 +243,41 @@ snapBtn.addEventListener("click", async (e) => {
   const dataURL = cvs.toDataURL("image/png");
 
   try {
+    // TM prediction
+    loading.textContent = "Loading model...";
+    const img = new Image();
+    img.src = dataURL;
+    await new Promise((r) => (img.onload = r));
+    const predictedType = await predictIDType(img);
+
+    loading.textContent = "Scanning...";
+
     const data = await fetchJSON("/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image: dataURL }),
     });
 
+    data.ID_type = predictedType;
     updateFields(data, dataURL);
   } catch (err) {
     alert("Error scanning camera: " + err.message);
   } finally {
     loading.style.display = "none";
+    loading.textContent = "Scanning...";
   }
 });
 
-// ✅ live preview when user edits DOB
+// -----------------------------
+// live preview when DOB edited
+// -----------------------------
 dobInput.addEventListener("input", refreshMinorPreview);
 recalcBtn.addEventListener("click", refreshMinorPreview);
 
-// ✅ Export PDF using current form values (not OCR-only)
+// -----------------------------
+// Export PDF using current fields
+// -----------------------------
 exportBtn.addEventListener("click", async () => {
-  // ensure preview is updated
   refreshMinorPreview();
 
   const payload = {
