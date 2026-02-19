@@ -4,20 +4,22 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 from werkzeug.utils import secure_filename
 
-# ngi
+import os
+import io
+import re
+import cv2
+import base64
+import numpy as np
+import traceback
+import random
+from datetime import datetime, date
+
+# ✅ Pillow ANTIALIAS fix (prevents crash in new Pillow versions)
 from PIL import Image
 if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
-import cv2
-import base64
 import easyocr
-import re
-import numpy as np
-import os
-import io
-import traceback
-from datetime import datetime
 
 app = Flask(__name__, template_folder="templates")
 
@@ -28,25 +30,60 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
-# Lazy OCR init
+# OCR lazy init
 reader = None
+
+# store last scanned record (no DB)
+LAST_RECORD = None
+
+
 def get_reader():
     global reader
     if reader is None:
         reader = easyocr.Reader(["en"], gpu=False)
     return reader
 
+
 def json_error(msg, code=400, **extra):
     payload = {"error": msg}
     payload.update(extra)
     return jsonify(payload), code
 
-# PDF -> image (first page)
-def pdf_first_page_to_bgr(pdf_path):
+
+def safe_resize(img, max_w=1200):
+    h, w = img.shape[:2]
+    if w > max_w:
+        scale = max_w / w
+        img = cv2.resize(img, (int(w * scale), int(h * scale)))
+    return img
+
+
+def generate_reference_id():
+    return f"REF-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000,9999)}"
+
+
+def compute_age_and_minor(dob_str: str):
+    if not dob_str:
+        return None, None
     try:
-        import fitz  # PyMuPDF
+        dob = datetime.strptime(dob_str, "%Y-%m-%d").date()
+    except:
+        return None, None
+
+    today = date.today()
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    return age, (age < 18)
+
+
+def pdf_first_page_to_bgr(pdf_path):
+    """
+    PDF support (optional). Requires PyMuPDF:
+    pip install pymupdf
+    """
+    try:
+        import fitz
     except Exception:
-        return None, "PyMuPDF not installed. Run: pip install pymupdf"
+        return None, "PyMuPDF not installed. Install: pip install pymupdf"
 
     try:
         doc = fitz.open(pdf_path)
@@ -61,12 +98,6 @@ def pdf_first_page_to_bgr(pdf_path):
     except Exception as e:
         return None, f"PDF render failed: {e}"
 
-def safe_resize(img, max_w=1200):
-    h, w = img.shape[:2]
-    if w > max_w:
-        scale = max_w / w
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
-    return img
 
 def parse_fields_from_image(img):
     r = get_reader()
@@ -76,10 +107,12 @@ def parse_fields_from_image(img):
     texts = [t.strip() for _, t, s in results if s > 0.4]
     full_text = " ".join(texts).upper()
 
+    # DOB: "JANUARY 28 2006"
     dob_match = re.search(
         r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2}\s+\d{4}",
         full_text
     )
+
     dob_mysql = ""
     if dob_match:
         try:
@@ -92,7 +125,9 @@ def parse_fields_from_image(img):
     middle_name = re.search(r"GITNANG APELYIDO/.*?MIDDLE NAME\s*([A-Z\s]+?)(?=\sPETSA NG)", full_text)
     address = re.search(r"TIRAHAN/ADDRESS\s+(.+)", full_text)
     contact = re.search(r"CONTACT\s+(.+)", full_text)
-    gender = re.search(r"SEX\s+([A-Z])", full_text)  # M/F usually
+
+    # Gender often M/F (Sex)
+    gender = re.search(r"SEX\s+([A-Z])", full_text)
 
     return {
         "ID_type": "",
@@ -105,20 +140,24 @@ def parse_fields_from_image(img):
         "Address": address.group(1).strip() if address else "",
     }
 
-# Return JSON for API crashes (no HTML)
+
 @app.errorhandler(Exception)
 def handle_exception(e):
+    # Always return JSON for API endpoints so frontend won't crash parsing HTML
     if request.path in ["/upload", "/scan", "/export-pdf"]:
         traceback.print_exc()
         return json_error("Server error", 500, details=str(e))
     raise e
 
+
 @app.route("/")
 def index():
     return render_template("index.html")
 
+
 @app.route("/upload", methods=["POST"])
 def upload():
+    global LAST_RECORD
     try:
         if "file" not in request.files:
             return json_error("No file uploaded", 400)
@@ -139,10 +178,11 @@ def upload():
 
         img_path_db = f"uploads/{unique}"
 
+        # decode
         if ext == ".pdf":
             img, err = pdf_first_page_to_bgr(saved_path)
             if err:
-                return json_error("PDF upload error", 500, details=err)
+                return json_error("PDF error", 500, details=err)
             if img is None:
                 return json_error("Could not read PDF", 400)
         else:
@@ -152,14 +192,25 @@ def upload():
 
         extracted = parse_fields_from_image(img)
         extracted["Img_path"] = img_path_db
+
+        extracted["Reference_id"] = generate_reference_id()
+        age, is_minor = compute_age_and_minor(extracted.get("Date_of_birth"))
+        extracted["Age"] = age
+        extracted["Is_minor"] = is_minor
+
+        # save latest
+        LAST_RECORD = extracted
+
         return jsonify(extracted), 200
 
     except Exception as e:
         traceback.print_exc()
         return json_error("Server error while scanning upload", 500, details=str(e))
 
+
 @app.route("/scan", methods=["POST"])
 def scan():
+    global LAST_RECORD
     try:
         data = request.get_json(silent=True)
         if not data or "image" not in data:
@@ -178,86 +229,130 @@ def scan():
             return json_error("Could not decode camera image", 400)
 
         filename = f"scan_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
-        img_path = os.path.join(UPLOAD_FOLDER, filename)
-        cv2.imwrite(img_path, img)
+        saved_path = os.path.join(UPLOAD_FOLDER, filename)
+        cv2.imwrite(saved_path, img)
         img_path_db = f"uploads/{filename}"
 
         extracted = parse_fields_from_image(img)
         extracted["Img_path"] = img_path_db
+
+        extracted["Reference_id"] = generate_reference_id()
+        age, is_minor = compute_age_and_minor(extracted.get("Date_of_birth"))
+        extracted["Age"] = age
+        extracted["Is_minor"] = is_minor
+
+        LAST_RECORD = extracted
         return jsonify(extracted), 200
 
     except Exception as e:
         traceback.print_exc()
         return json_error("Server error while scanning camera", 500, details=str(e))
 
-# ✅ Export PDF from CURRENT form data (no DB)
+
+def wrap_text(text, width=95):
+    text = (text or "").replace("\n", " ").strip()
+    lines = []
+    while len(text) > width:
+        lines.append(text[:width])
+        text = text[width:]
+    if text:
+        lines.append(text)
+    return lines
+
+
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
-    data = request.get_json(silent=True) or {}
+    try:
+        data = request.get_json(silent=True) or {}
 
-    filename = f"guest_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
-    pdf_path = os.path.join(PDF_FOLDER, filename)
+        # ✅ compute from form DOB (user editable)
+        age, is_minor = compute_age_and_minor(data.get("Date_of_birth", ""))
+        data["Age"] = age
+        data["Is_minor"] = is_minor
 
-    c = canvas.Canvas(pdf_path, pagesize=A4)
-    width, height = A4
+        ref = data.get("Reference_id") or generate_reference_id()
+        data["Reference_id"] = ref
 
-    margin = 50
-    image_width = 150
-    image_height = 100
+        filename = f"guest_{ref}.pdf"
+        pdf_path = os.path.join(PDF_FOLDER, filename)
 
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(margin, height - margin, "GUEST INFORMATION")
-    c.setFont("Helvetica", 10)
-    c.drawString(margin, height - margin - 20, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        c = canvas.Canvas(pdf_path, pagesize=A4)
+        w, h = A4
+        margin = 45
 
-    # image
-    img_rel = (data.get("Img_path") or "").replace("\\", "/")
-    img_path = os.path.join(app.root_path, "static", img_rel)
-    if img_rel and os.path.exists(img_path):
-        try:
-            img = ImageReader(img_path)
-            c.drawImage(img, margin, height - margin - image_height - 40,
-                        width=image_width, height=image_height, preserveAspectRatio=True)
-        except Exception as e:
-            print("Image error:", e)
+        # Header
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, h - margin, "GUEST INFORMATION REPORT")
 
-    # text fields
-    text_x = margin + image_width + 20
-    text_y = height - margin - 40
-    c.setFont("Helvetica", 12)
+        c.setFont("Helvetica", 9)
+        c.drawRightString(w - margin, h - margin, f"Reference ID: {ref}")
+        c.drawRightString(w - margin, h - margin - 14, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        c.line(margin, h - margin - 22, w - margin, h - margin - 22)
 
-    c.drawString(text_x, text_y, f"First Name: {data.get('First_name','')}")
-    text_y -= 18
-    c.drawString(text_x, text_y, f"Middle Name: {data.get('Middle_name','')}")
-    text_y -= 18
-    c.drawString(text_x, text_y, f"Last Name: {data.get('Last_name','')}")
-    text_y -= 18
-    c.drawString(text_x, text_y, f"DOB: {data.get('Date_of_birth','') or 'N/A'}")
-    text_y -= 18
-    c.drawString(text_x, text_y, f"Gender: {data.get('Gender','') or 'N/A'}")
-    text_y -= 18
-    c.drawString(text_x, text_y, f"Contact: {data.get('Contact','')}")
-    text_y -= 18
-    c.drawString(text_x, text_y, f"ID Type: {data.get('ID_type','')}")
+        # Image
+        photo_x = margin
+        photo_y = h - margin - 150
+        photo_w = 140
+        photo_h = 105
+        c.rect(photo_x, photo_y, photo_w, photo_h)
 
-    addr_y = height - margin - image_height - 60 - 18 * 5
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(margin, addr_y, "Address:")
-    c.setFont("Helvetica", 10)
-    addr_text = c.beginText(margin, addr_y - 18)
-    addr_text.setLeading(14)
+        img_rel = (data.get("Img_path") or "").replace("\\", "/")
+        img_abs = os.path.join(app.root_path, "static", img_rel)
+        if img_rel and os.path.exists(img_abs):
+            try:
+                c.drawImage(ImageReader(img_abs), photo_x + 3, photo_y + 3,
+                            width=photo_w - 6, height=photo_h - 6,
+                            preserveAspectRatio=True, anchor='c')
+            except:
+                pass
 
-    address = (data.get("Address") or "").replace("\n", " ")
-    max_chars_per_line = 90
-    while address:
-        addr_text.textLine(address[:max_chars_per_line])
-        address = address[max_chars_per_line:]
-    c.drawText(addr_text)
+        # Fields aligned
+        x_label = photo_x + photo_w + 20
+        x_val = x_label + 115
+        y = h - margin - 45
 
-    c.showPage()
-    c.save()
+        def kv(label, value):
+            nonlocal y
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(x_label, y, f"{label}:")
+            c.setFont("Helvetica", 10)
+            c.drawString(x_val, y, value if value else "N/A")
+            y -= 16
 
-    return send_file(pdf_path, as_attachment=True)
+        kv("ID Type", data.get("ID_type", ""))
+        kv("First Name", data.get("First_name", ""))
+        kv("Middle Name", data.get("Middle_name", ""))
+        kv("Last Name", data.get("Last_name", ""))
+        kv("Birthdate", data.get("Date_of_birth", ""))
+
+        kv("Age", str(age) if age is not None else "N/A")
+        status_text = "MINOR" if is_minor is True else ("ADULT" if is_minor is False else "UNKNOWN")
+        kv("Status", status_text)
+
+        kv("Gender", data.get("Gender", ""))
+        kv("Contact", data.get("Contact", ""))
+
+        # Address wrapped
+        y = photo_y - 25
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(margin, y, "Address:")
+        y -= 14
+        c.setFont("Helvetica", 10)
+        for line in wrap_text(data.get("Address", ""), width=95):
+            c.drawString(margin, y, line)
+            y -= 13
+
+        # Footer
+        c.setFont("Helvetica-Oblique", 8)
+        c.drawString(margin, 25, "Generated by OCR Guest System")
+        c.drawRightString(w - margin, 25, "Page 1")
+
+        c.save()
+        return send_file(pdf_path, as_attachment=True)
+
+    except Exception as e:
+        traceback.print_exc()
+        return json_error("PDF export failed", 500, details=str(e))
 
 if __name__ == "__main__":
     app.run(debug=True)

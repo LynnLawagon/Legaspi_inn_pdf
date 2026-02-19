@@ -1,10 +1,17 @@
 const toggleBtn = document.getElementById("toggle-btn");
+const recalcBtn = document.getElementById("recalc-btn");
+const exportBtn = document.getElementById("export-btn");
+
 const inputFile = document.getElementById("input-file");
 const previewImg = document.getElementById("preview-img");
 const camera = document.getElementById("camera");
 const snapBtn = document.getElementById("snap-btn");
 const dropText = document.getElementById("drop-text");
 const loading = document.getElementById("loading-indicator");
+
+const refIdInput = document.getElementById("ref-id");
+const ageInput = document.getElementById("age");
+const minorStatusInput = document.getElementById("minor-status");
 
 const idTypeInput = document.getElementById("id-type");
 const firstNameInput = document.getElementById("first-name");
@@ -14,29 +21,11 @@ const dobInput = document.getElementById("dob");
 const genderInput = document.getElementById("gender");
 const contactInput = document.getElementById("contact");
 const addressInput = document.getElementById("address");
-const exportBtn = document.getElementById("export-btn");
 
-let cameraActive = false, stream = null, currentImgPath = "";
-let tmModel;
+let cameraActive = false;
+let stream = null;
+let currentImgPath = "";
 
-// TM model (optional)
-async function loadTMModel() {
-  try {
-    const URL = "/static/my_model/";
-    tmModel = await tmImage.load(URL + "model.json", URL + "metadata.json");
-  } catch (e) {
-    console.warn("TM model not loaded (ok if you don’t need it):", e);
-  }
-}
-loadTMModel();
-
-async function predictIDType(img) {
-  if (!tmModel) return "";
-  const prediction = await tmModel.predict(img);
-  return prediction.reduce((a, b) => (a.probability > b.probability ? a : b), { probability: 0 }).className;
-}
-
-// robust fetchJSON
 async function fetchJSON(url, options) {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -45,27 +34,57 @@ async function fetchJSON(url, options) {
   try {
     data = JSON.parse(text);
   } catch {
-    console.error("Server returned non-JSON:", text);
+    console.error("Non-JSON response:", text);
     throw new Error("Server returned HTML/non-JSON. Check Flask console.");
   }
 
   if (!res.ok) {
     throw new Error((data.error || "Request failed") + (data.details ? " | " + data.details : ""));
   }
-
   return data;
 }
 
+// ✅ local compute preview for age/minor (based on current DOB field)
+function computeAgeAndMinor(dobStr) {
+  if (!dobStr || !/^\d{4}-\d{2}-\d{2}$/.test(dobStr)) return { age: "", status: "UNKNOWN" };
+
+  const [y, m, d] = dobStr.split("-").map(Number);
+  const dob = new Date(y, m - 1, d);
+  if (isNaN(dob.getTime())) return { age: "", status: "UNKNOWN" };
+
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const hasHadBirthday =
+    (today.getMonth() > dob.getMonth()) ||
+    (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate());
+
+  if (!hasHadBirthday) age--;
+
+  if (age < 0 || age > 130) return { age: "", status: "UNKNOWN" };
+
+  return { age: String(age), status: age < 18 ? "MINOR" : "ADULT" };
+}
+
+function refreshMinorPreview() {
+  const { age, status } = computeAgeAndMinor(dobInput.value.trim());
+  ageInput.value = age;
+  minorStatusInput.value = status;
+}
+
 function updateFields(data, imgSrc) {
+  refIdInput.value = data.Reference_id || refIdInput.value || "";
+  currentImgPath = data.Img_path || currentImgPath;
+
+  idTypeInput.value = data.ID_type || "";
   firstNameInput.value = data.First_name || "";
   middleNameInput.value = data.Middle_name || "";
   lastNameInput.value = data.Last_name || "";
-  dobInput.value = data.Date_of_birth || "";
+  dobInput.value = data.Date_of_birth || ""; // editable
   genderInput.value = data.Gender || "";
   contactInput.value = data.Contact || "";
   addressInput.value = data.Address || "";
-  idTypeInput.value = data.ID_type || "";
-  currentImgPath = data.Img_path || "";
+
+  refreshMinorPreview();
 
   if (imgSrc) {
     previewImg.src = imgSrc;
@@ -80,7 +99,12 @@ function updateFields(data, imgSrc) {
   cameraActive = false;
 }
 
-// upload
+// Click upload area to upload
+document.getElementById("img-view").addEventListener("click", () => {
+  if (!cameraActive) inputFile.click();
+});
+
+// Upload
 inputFile.addEventListener("change", async () => {
   const file = inputFile.files[0];
   if (!file) return;
@@ -91,20 +115,10 @@ inputFile.addEventListener("change", async () => {
     const isImage = file.type.startsWith("image/");
     const imgSrc = isImage ? URL.createObjectURL(file) : "";
 
-    let idType = "";
-    if (isImage) {
-      const img = new Image();
-      img.src = imgSrc;
-      await new Promise((r) => (img.onload = r));
-      idType = await predictIDType(img);
-    }
-
     const formData = new FormData();
     formData.append("file", file);
 
     const data = await fetchJSON("/upload", { method: "POST", body: formData });
-    data.ID_type = idType;
-
     updateFields(data, imgSrc);
   } catch (err) {
     alert("Error scanning upload: " + err.message);
@@ -152,8 +166,10 @@ function stopCamera() {
   }
 }
 
-// camera snap
-snapBtn.addEventListener("click", async () => {
+// Snap
+snapBtn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+
   if (!camera.videoWidth || !camera.videoHeight) {
     alert("Camera not ready yet");
     return;
@@ -161,36 +177,38 @@ snapBtn.addEventListener("click", async () => {
 
   loading.style.display = "flex";
 
-  const canv = document.createElement("canvas");
-  canv.width = camera.videoWidth;
-  canv.height = camera.videoHeight;
-  canv.getContext("2d").drawImage(camera, 0, 0, canv.width, canv.height);
-  const dataURL = canv.toDataURL("image/png");
+  const cvs = document.createElement("canvas");
+  cvs.width = camera.videoWidth;
+  cvs.height = camera.videoHeight;
+  cvs.getContext("2d").drawImage(camera, 0, 0, cvs.width, cvs.height);
+  const dataURL = cvs.toDataURL("image/png");
 
   try {
-    const img = new Image();
-    img.src = dataURL;
-    await new Promise((r) => (img.onload = r));
-    const idType = await predictIDType(img);
-
     const data = await fetchJSON("/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image: dataURL }),
     });
 
-    data.ID_type = idType;
     updateFields(data, dataURL);
   } catch (err) {
-    alert("Error scanning snap: " + err.message);
+    alert("Error scanning camera: " + err.message);
   } finally {
     loading.style.display = "none";
   }
 });
 
-// ✅ Export PDF from current form (POST)
+// ✅ live preview when user edits DOB
+dobInput.addEventListener("input", refreshMinorPreview);
+recalcBtn.addEventListener("click", refreshMinorPreview);
+
+// ✅ Export PDF using current form values (not OCR-only)
 exportBtn.addEventListener("click", async () => {
+  // ensure preview is updated
+  refreshMinorPreview();
+
   const payload = {
+    Reference_id: refIdInput.value,
     ID_type: idTypeInput.value,
     First_name: firstNameInput.value,
     Middle_name: middleNameInput.value,
@@ -199,28 +217,27 @@ exportBtn.addEventListener("click", async () => {
     Gender: genderInput.value,
     Contact: contactInput.value,
     Address: addressInput.value,
-    Img_path: currentImgPath,
+    Img_path: currentImgPath
   };
 
   try {
     const res = await fetch("/export-pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
-      const text = await res.text();
-      alert("Export failed: " + text);
+      const txt = await res.text();
+      alert("Export failed: " + txt);
       return;
     }
 
-    // download pdf
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "guest.pdf";
+    a.download = `${payload.Reference_id || "guest"}.pdf`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -228,9 +245,4 @@ exportBtn.addEventListener("click", async () => {
   } catch (e) {
     alert("Export error: " + e.message);
   }
-});
-
-// click preview area to upload
-document.getElementById("img-view").addEventListener("click", () => {
-  if (!cameraActive) inputFile.click();
 });
