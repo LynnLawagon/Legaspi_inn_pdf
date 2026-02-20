@@ -113,15 +113,16 @@ function generateReferenceId() {
 
   const hh = String(now.getHours()).padStart(2, "0");
   const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
 
-  return `REF-${y}${m}${d}-${hh}${mm}`;
+  return `REF-${y}${m}${d}-${hh}${mm}${ss}`;
 }
 
-// Auto-generate when page loads
+// Set once on page load
 refIdInput.value = generateReferenceId();
 
 function updateFields(data, imgSrc) {
-  refIdInput.value = data.Reference_id || refIdInput.value || "";
+  refIdInput.value = generateReferenceId();
   currentImgPath = data.Img_path || currentImgPath;
 
   idTypeInput.value = data.ID_type || "";
