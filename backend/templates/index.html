@@ -26,8 +26,7 @@
     <h2>Results</h2>
 
     <div class="form-group"><label>Reference ID:</label><input id="ref-id" readonly /></div>
-
-    <!-- ✅ computed preview (updates when DOB changes or export happens) -->
+    <!-- computed from DOB-->
     <div class="form-group"><label>Age:</label><input id="age" readonly /></div>
     <div class="form-group"><label>Status (Minor/Adult):</label><input id="minor-status" readonly /></div>
 
@@ -36,7 +35,7 @@
     <div class="form-group"><label>Middle Name:</label><input id="middle-name"/></div>
     <div class="form-group"><label>Last Name:</label><input id="last-name"/></div>
 
-    <!-- ✅ user editable -->
+    <!--user editable -->
     <div class="form-group"><label>Date of Birth:</label><input id="dob" placeholder="YYYY-MM-DD"/></div>
 
     <div class="form-group"><label>Gender:</label><input id="gender"/></div>
@@ -51,6 +50,7 @@
   </div>
 </div>
 
+<!--scripts-->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
 

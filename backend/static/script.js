@@ -1,3 +1,4 @@
+//constants
 const toggleBtn = document.getElementById("toggle-btn");
 const recalcBtn = document.getElementById("recalc-btn");
 const exportBtn = document.getElementById("export-btn");
@@ -26,9 +27,7 @@ let cameraActive = false;
 let stream = null;
 let currentImgPath = "";
 
-// -----------------------------
-// Teachable Machine (lazy load)
-// -----------------------------
+// Teachable Machine
 let tmModel = null;
 let tmLoadingPromise = null;
 
@@ -43,8 +42,9 @@ async function ensureTM() {
   return tmLoadingPromise;
 }
 
+//predict ID type using Teachable Machine model
 async function predictIDType(imgEl) {
-  const model = await ensureTM(); // loads only first time
+  const model = await ensureTM(); 
   const prediction = await model.predict(imgEl);
   const best = prediction.reduce((a, b) =>
     a.probability > b.probability ? a : b
@@ -52,9 +52,7 @@ async function predictIDType(imgEl) {
   return best.className;
 }
 
-// -----------------------------
-// Helpers
-// -----------------------------
+// Helpers 
 async function fetchJSON(url, options) {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -75,6 +73,7 @@ async function fetchJSON(url, options) {
   return data;
 }
 
+//compute age and minor status from DOB string (YYYY-MM-DD)
 function computeAgeAndMinor(dobStr) {
   if (!dobStr || !/^\d{4}-\d{2}-\d{2}$/.test(dobStr)) {
     return { age: "", status: "UNKNOWN" };
@@ -98,12 +97,14 @@ function computeAgeAndMinor(dobStr) {
   return { age: String(age), status: age < 18 ? "MINOR" : "ADULT" };
 }
 
+// Update age and minor status preview based on current DOB input
 function refreshMinorPreview() {
   const { age, status } = computeAgeAndMinor(dobInput.value.trim());
   ageInput.value = age;
   minorStatusInput.value = status;
 }
 
+// Generate a unique reference ID based on current timestamp
 function generateReferenceId() {
   const now = new Date();
 
@@ -118,7 +119,7 @@ function generateReferenceId() {
   return `REF-${y}${m}${d}-${hh}${mm}${ss}`;
 }
 
-// Set once on page load
+// Initialize with a reference ID on page load
 refIdInput.value = generateReferenceId();
 
 function updateFields(data, imgSrc) {
@@ -129,7 +130,7 @@ function updateFields(data, imgSrc) {
   firstNameInput.value = data.First_name || "";
   middleNameInput.value = data.Middle_name || "";
   lastNameInput.value = data.Last_name || "";
-  dobInput.value = data.Date_of_birth || ""; // editable
+  dobInput.value = data.Date_of_birth || ""; 
   genderInput.value = data.Gender || "";
   contactInput.value = data.Contact || "";
   addressInput.value = data.Address || "";
@@ -149,16 +150,12 @@ function updateFields(data, imgSrc) {
   cameraActive = false;
 }
 
-// -----------------------------
 // Click upload area to upload
-// -----------------------------
 document.getElementById("img-view").addEventListener("click", () => {
   if (!cameraActive) inputFile.click();
 });
 
-// -----------------------------
-// Upload -> /upload (FIXED)
-// -----------------------------
+// Upload
 inputFile.addEventListener("change", async () => {
   const file = inputFile.files[0];
   if (!file) return;
@@ -168,8 +165,8 @@ inputFile.addEventListener("change", async () => {
 
   const imgSrc = URL.createObjectURL(file);
 
+  //prediction
   try {
-    // Predict ID type ONLY if it's an image
     let predictedType = "";
     if (file.type.startsWith("image/")) {
       loading.textContent = "Loading model...";
@@ -185,7 +182,6 @@ inputFile.addEventListener("change", async () => {
 
     const data = await fetchJSON("/upload", { method: "POST", body: formData });
 
-    // Inject predicted ID type
     if (predictedType) data.ID_type = predictedType;
 
     updateFields(data, imgSrc);
@@ -197,9 +193,7 @@ inputFile.addEventListener("change", async () => {
   }
 });
 
-// -----------------------------
 // Toggle camera
-// -----------------------------
 toggleBtn.addEventListener("click", () => {
   cameraActive = !cameraActive;
 
@@ -239,9 +233,7 @@ function stopCamera() {
   }
 }
 
-// -----------------------------
-// Snap -> /scan (with TM prediction)
-// -----------------------------
+// Snap 
 snapBtn.addEventListener("click", async (e) => {
   e.stopPropagation();
 
@@ -260,7 +252,6 @@ snapBtn.addEventListener("click", async (e) => {
   const dataURL = cvs.toDataURL("image/png");
 
   try {
-    // TM prediction
     loading.textContent = "Loading model...";
     const img = new Image();
     img.src = dataURL;
@@ -285,15 +276,11 @@ snapBtn.addEventListener("click", async (e) => {
   }
 });
 
-// -----------------------------
 // live preview when DOB edited
-// -----------------------------
 dobInput.addEventListener("input", refreshMinorPreview);
 recalcBtn.addEventListener("click", refreshMinorPreview);
 
-// -----------------------------
 // Export PDF using current fields
-// -----------------------------
 exportBtn.addEventListener("click", async () => {
   refreshMinorPreview();
 

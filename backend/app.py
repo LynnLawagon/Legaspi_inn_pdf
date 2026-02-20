@@ -14,7 +14,7 @@ import traceback
 import random
 from datetime import datetime, date
 
-# ✅ Pillow ANTIALIAS fix (prevents crash in new Pillow versions)
+#Pillow
 from PIL import Image
 if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
@@ -30,7 +30,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
-# OCR lazy init
+# OCR
 reader = None
 
 # store last scanned record (no DB)
@@ -57,11 +57,11 @@ def safe_resize(img, max_w=1200):
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
     return img
 
-
+# reference ID format
 def generate_reference_id():
     return f"REF-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000,9999)}"
 
-
+#compute age and minor status from DOB string in "YYYY-MM-DD" format
 def compute_age_and_minor(dob_str: str):
     if not dob_str:
         return None, None
@@ -75,11 +75,8 @@ def compute_age_and_minor(dob_str: str):
     return age, (age < 18)
 
 
+#PDF to image using PyMuPDF (fitz)
 def pdf_first_page_to_bgr(pdf_path):
-    """
-    PDF support (optional). Requires PyMuPDF:
-    pip install pymupdf
-    """
     try:
         import fitz
     except Exception:
@@ -98,7 +95,7 @@ def pdf_first_page_to_bgr(pdf_path):
     except Exception as e:
         return None, f"PDF render failed: {e}"
 
-
+# Extract fields using regex from OCR text
 def parse_fields_from_image(img):
     r = get_reader()
     img = safe_resize(img)
@@ -107,7 +104,6 @@ def parse_fields_from_image(img):
     texts = [t.strip() for _, t, s in results if s > 0.4]
     full_text = " ".join(texts).upper()
 
-    # DOB: "JANUARY 28 2006"
     dob_match = re.search(
         r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2}\s+\d{4}",
         full_text
@@ -126,7 +122,6 @@ def parse_fields_from_image(img):
     address = re.search(r"TIRAHAN/ADDRESS\s+(.+)", full_text)
     contact = re.search(r"CONTACT\s+(.+)", full_text)
 
-    # Gender often M/F (Sex)
     gender = re.search(r"SEX\s+([A-Z])", full_text)
 
     return {
@@ -140,10 +135,9 @@ def parse_fields_from_image(img):
         "Address": address.group(1).strip() if address else "",
     }
 
-
+# Global error handler for unexpected exceptions
 @app.errorhandler(Exception)
 def handle_exception(e):
-    # Always return JSON for API endpoints so frontend won't crash parsing HTML
     if request.path in ["/upload", "/scan", "/export-pdf"]:
         traceback.print_exc()
         return json_error("Server error", 500, details=str(e))
@@ -198,7 +192,6 @@ def upload():
         extracted["Age"] = age
         extracted["Is_minor"] = is_minor
 
-        # save latest
         LAST_RECORD = extracted
 
         return jsonify(extracted), 200
@@ -259,13 +252,11 @@ def wrap_text(text, width=95):
         lines.append(text)
     return lines
 
-
+# Generate PDF report from extracted data
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
     try:
         data = request.get_json(silent=True) or {}
-
-        # ✅ compute from form DOB (user editable)
         age, is_minor = compute_age_and_minor(data.get("Date_of_birth", ""))
         data["Age"] = age
         data["Is_minor"] = is_minor
