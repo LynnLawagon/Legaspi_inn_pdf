@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIntelli</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@200;400;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='landing.css') }}" />
+</head>
+<body>
+
+  <!-- NAV -->
+<header class="nav">
+  <div class="nav-inner">
+    <div class="brand">AI Intelligence Inn</div>
+
+    <!-- Hamburger button (shows on mobile) -->
+    <button class="nav-toggle" id="navToggle" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+
+    <!-- Links -->
+    <nav class="nav-links" id="navLinks">
+      <a href="#home">Home</a>
+      <a href="#about">About</a>
+      <a href="#use">Use</a>
+      <a href="#history">History</a>
+      <a href="#support">Support</a>
+      <a href="#contact">Contact</a>
+      <a class="nav-cta" href="{{ url_for('scan_page') }}">Get started</a>
+    </nav>
+  </div>
+</header>
+
+  <!-- HERO -->
+  <section id="home" class="hero">
+    <div class="hero-inner">
+      <h1 class="hero-title">AIntelli</h1>
+      <p class="hero-subtitle">Smart ID scanning and PDF generation system</p>
+      <a class="btn-primary" href="{{ url_for('scan_page') }}">Get started</a>
+    </div>
+  </section>
+
+  <!-- ABOUT -->
+  <section id="about" class="section about">
+    <div class="section-inner two-col">
+      <h2 class="section-title">About</h2>
+
+      <div class="section-card">
+        <p class="section-text">
+          This OCR system extracts text from National IDs and School IDs,
+          automatically detecting important fields such as First Name, Middle Name,
+          Last Name, Address, and Date of Birth. The extracted information can be
+          reviewed and edited by the user before being organized and saved as a PDF
+          report, making record-keeping simple and efficient.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW TO USE -->
+  <section id="use" class="section how">
+    <div class="section-inner">
+      <h2 class="section-title center">How to use AIntelli?</h2>
+
+      <div class="steps-grid">
+        <!-- row 1 -->
+        <div class="step-card">
+          <img class="step-icon" src="{{ url_for('static', filename='landing/icons/upload.png') }}" alt="Upload icon">
+          <p>Upload an image of the ID or capture a photo using the camera feature.</p>
+        </div>
+
+        <div class="step-card">
+          <img class="step-icon" src="{{ url_for('static', filename='landing/icons/scan.png') }}" alt="Scan icon">
+          <p>The system processes the image and extracts text automatically.</p>
+        </div>
+
+        <div class="step-card">
+          <img class="step-icon" src="{{ url_for('static', filename='landing/icons/calculate.png') }}" alt="Recalculate icon">
+          <p>Recalculate if age is unmatch.</p>
+        </div>
+
+        <!-- row 2 -->
+        <div class="step-card bottom-card">
+          <img class="step-icon" src="{{ url_for('static', filename='landing/icons/description.png') }}" alt="Review icon">
+          <p>Extracted information is displayed on-screen for review.</p>
+        </div>
+
+        <div class="step-card bottom-card">
+          <img class="step-icon" src="{{ url_for('static', filename='landing/icons/export.png') }}" alt="Export icon">
+          <p>Save the results as a PDF, which will be stored in the designated folder.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HISTORY -->
+  <section id="history" class="section history">
+    <div class="section-inner two-col">
+      <h2 class="section-title">History of Legaspi Inn</h2>
+
+      <div class="section-card">
+        <p class="section-text">
+          Legaspi Inn began as a small lodging business originally owned and operated by an older family member of the current owners.
+          As the former owner aged, the responsibility of managing the inn was handed over to the family of the current owner.
+          Since then, the family has taken an active role in overseeing the daily operations to ensure that the inn is well-maintained,
+          services are delivered properly, and staff needs are addressed.
+        </p>
+
+        <p class="section-text" style="margin-top:14px;">
+          Under the current management, Legaspi Inn has continued to provide affordable and clean accommodation, with a focus on simplicity,
+          comfort, and personalized service. The owners and co-owners work closely with staff to monitor the inn’s operations, from guest check-ins
+          to room maintenance and inventory control.
+        </p>
+
+        <p class="section-text" style="margin-top:14px;">
+          To further strengthen operational efficiency and improve the guest verification process, AIntelli was developed as an internal ID scanning
+          and documentation system for Legaspi Inn. By automating ID data extraction, age validation, and PDF report generation, AIntelli supports the inn’s
+          commitment to organized record-keeping, faster check-ins, and reliable guest management.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SUPPORT -->
+  <section id="support" class="section support">
+    <div class="section-inner support-grid">
+      <div>
+        <h2 class="section-title">How AIntelli Supports<br>Legaspi Inn?</h2>
+
+        <div class="support-icons">
+          <img src="{{ url_for('static', filename='img/id1.png') }}" alt="ID sample 1">
+          <img src="{{ url_for('static', filename='img/id2.png') }}" alt="ID sample 2">
+        </div>
+      </div>
+
+      <ol class="support-list">
+        <li>Automatically calculates age from Date of Birth.</li>
+        <li>Helps staff validate guest eligibility.</li>
+        <li>Stores verified guest details securely.</li>
+        <li>Faster check-in process.</li>
+        <li>Generates PDF documentation reports.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- CONTACT -->
+  <section id="contact" class="section contact">
+    <div class="section-inner contact-grid">
+      <h2 class="section-title">Contact</h2>
+
+      <div class="contact-items">
+        <div class="contact-item">
+          <img src="{{ url_for('static', filename='landing/icons/call.png') }}" alt="Call">
+          <span>09070856434</span>
+        </div>
+
+        <div class="contact-item">
+          <img src="{{ url_for('static', filename='landing/icons/mail.png') }}" alt="Mail">
+          <span>juvygultiano1@gmail.com</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <p>All rights reserved</p>
+  </footer>
+
+<script>
+  const navToggle = document.getElementById("navToggle");
+  const navLinks = document.getElementById("navLinks");
+
+  function closeMenu(){
+    navLinks.classList.remove("open");
+    navToggle.classList.remove("open");
+    navToggle.setAttribute("aria-expanded", "false");
+  }
+
+  navToggle.addEventListener("click", () => {
+    const isOpen = navLinks.classList.toggle("open");
+    navToggle.classList.toggle("open", isOpen);
+    navToggle.setAttribute("aria-expanded", String(isOpen));
+  });
+
+  // close menu when clicking a link
+  navLinks.querySelectorAll("a").forEach(a => {
+    a.addEventListener("click", closeMenu);
+  });
+
+  // close menu if user clicks outside
+  document.addEventListener("click", (e) => {
+    if (!navLinks.contains(e.target) && !navToggle.contains(e.target)) {
+      closeMenu();
+    }
+  });
+
+  // close on ESC
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeMenu();
+  });
+</script>
+
+</body>
+</html>

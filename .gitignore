@@ -1,0 +1,13 @@
+# Python
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+
+# Uploads / Generated files
+backend/static/uploads/
+backend/static/PDFs/
+
+# OS
+.DS_Store
+Thumbs.db

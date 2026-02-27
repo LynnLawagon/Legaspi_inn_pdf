@@ -8,17 +8,27 @@
 <body>
 
 <div class="hero">
+
   <div id="drop-area">
     <input type="file" id="input-file" accept="image/*,.pdf" style="display:none;" />
-    <div id="img-view">
-      <img id="preview-img" src="{{ url_for('static', filename='img/upload.png') }}" alt="Preview"/>
-      <video id="camera" autoplay></video>
 
-      <button id="snap-btn" type="button">Snap</button>
-      <div id="loading-indicator">Scanning...</div>
+    <div id="img-view">
+      <!-- FIXED MEDIA BOX: upload icon / captured image / camera preview all live here -->
+      <div class="media-box">
+        <img id="preview-img" src="{{ url_for('static', filename='img/upload.png') }}" alt="Preview"/>
+        <video id="camera" autoplay playsinline></video>
+
+        <!-- Button is now right-center (vertical) -->
+        <button id="snap-btn" type="button" aria-label="Snap Photo">
+          <img src="{{ url_for('static', filename='img/camera.png') }}" alt="Camera">
+        </button>
+
+        <!-- Loading overlay stays inside the media box -->
+        <div id="loading-indicator">Scanning...</div>
+      </div>
 
       <p id="drop-text">Upload your ID here</p>
-      <span>Supports School ID or National ID</span>
+      <span>Supports School ID / National ID (Primary) and Birth Certification / Barangay Clearance (Secondary)</span>
     </div>
   </div>
 
@@ -26,34 +36,59 @@
     <h2>Results</h2>
 
     <div class="form-group"><label>Reference ID:</label><input id="ref-id" readonly /></div>
-    <!-- computed from DOB-->
     <div class="form-group"><label>Age:</label><input id="age" readonly /></div>
-    <div class="form-group"><label>Status (Minor/Adult):</label><input id="minor-status" readonly /></div>
 
+    <div class="form-group">
+      <label>Upload As:</label>
+      <select id="id-slot">
+        <option value="primary">Primary ID (National ID / School ID)</option>
+        <option value="secondary">Secondary ID (Birth Cert / Barangay)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>ID Category (Auto):</label>
+      <input id="id-category" readonly />
+    </div>
+
+    <div class="form-group">
+      <label>Secondary IDs Count:</label>
+      <input id="secondary-count" readonly />
+    </div>
+
+    <div class="form-group">
+      <label>Can Proceed:</label>
+      <input id="can-proceed" readonly />
+    </div>
+
+    <!-- Editable fields -->
     <div class="form-group"><label>ID Type:</label><input id="id-type"/></div>
+    <div class="form-group"><label>ID Number:</label><input id="id-no"/></div>
+
     <div class="form-group"><label>First Name:</label><input id="first-name"/></div>
     <div class="form-group"><label>Middle Name:</label><input id="middle-name"/></div>
     <div class="form-group"><label>Last Name:</label><input id="last-name"/></div>
-
-    <!--user editable -->
     <div class="form-group"><label>Date of Birth:</label><input id="dob" placeholder="YYYY-MM-DD"/></div>
-
     <div class="form-group"><label>Gender:</label><input id="gender"/></div>
     <div class="form-group"><label>Contact:</label><input id="contact"/></div>
     <div class="form-group"><label>Address:</label><input id="address"/></div>
 
     <div class="btn-row">
       <button id="toggle-btn" type="button">Use Camera</button>
-      <button id="recalc-btn" type="button">Recalculate</button>
-      <button id="export-btn" type="button">Export PDF</button>
+      <button id="recalc-btn" type="button">Recalculate Age</button>
+
+      <button id="add-secondary-btn" type="button">Add Secondary ID</button>
+
+      <button id="export-btn" type="button" disabled>Export PDF</button>
+      <button id="new-guest-btn" type="button">New Guest</button>
     </div>
   </div>
+
 </div>
 
-<!--scripts-->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
-
 <script src="{{ url_for('static', filename='script.js') }}"></script>
+
 </body>
 </html>
