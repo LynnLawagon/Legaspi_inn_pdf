@@ -7,6 +7,7 @@ const recalcBtn = document.getElementById("recalc-btn");
 const exportBtn = document.getElementById("export-btn");
 const newGuestBtn = document.getElementById("new-guest-btn");
 const addSecondaryBtn = document.getElementById("add-secondary-btn");
+const retryBtn = document.getElementById("retry-btn");
 
 const inputFile = document.getElementById("input-file");
 const previewImg = document.getElementById("preview-img");
@@ -42,6 +43,10 @@ let stream = null;
 let currentRefId = "";
 const PLACEHOLDER_SRC = previewImg.src;
 let currentObjectUrl = null;
+
+// Retry state
+let lastScanSource = null; // "camera" | "upload"
+let lastCameraDataURL = "";
 
 // =====================
 // TEACHABLE MACHINE
@@ -85,6 +90,10 @@ function hideLoading() {
   loading.textContent = "Scanning...";
 }
 
+function setRetryEnabled(on) {
+  retryBtn.disabled = !on;
+}
+
 async function fetchJSON(url, options) {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -98,6 +107,7 @@ async function fetchJSON(url, options) {
   }
 
   if (!res.ok) {
+    // Backend errors like: {"error":"No ID detected..."}
     throw new Error(
       (data.error || "Request failed") +
         (data.details ? " | " + data.details : "")
@@ -230,10 +240,93 @@ function applyRecordToUI(rec) {
 }
 
 // =====================
+// RESET (UI + server record optional)
+// =====================
+async function resetAll({ resetServer = false } = {}) {
+  const ref = currentRefId || refIdInput.value;
+
+  if (resetServer && ref) {
+    try {
+      await fetchJSON("/reset-record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reference_id: ref }),
+      });
+    } catch {
+      // ignore reset errors
+    }
+  }
+
+  currentRefId = "";
+  lastScanSource = null;
+  lastCameraDataURL = "";
+  setRetryEnabled(false);
+
+  refIdInput.value = "";
+  ageInput.value = "";
+
+  idCategoryInput.value = "";
+  secondaryCountInput.value = "";
+  canProceedInput.value = "";
+
+  idTypeInput.value = "";
+  idNoInput.value = "";
+
+  firstNameInput.value = "";
+  middleNameInput.value = "";
+  lastNameInput.value = "";
+  dobInput.value = "";
+  genderInput.value = "";
+  contactInput.value = "";
+  addressInput.value = "";
+
+  exportBtn.disabled = true;
+  addSecondaryBtn.style.display = "none";
+
+  setUploadMode(false);
+}
+
+// =====================
+// CAMERA SCAN (reusable for retry)
+// =====================
+async function scanFromCameraDataURL(dataURL) {
+  showLoading("Loading model...");
+
+  const img = new Image();
+  img.src = dataURL;
+  await new Promise((r) => (img.onload = r));
+  const predictedType = await predictIDType(img);
+
+  showLoading("Scanning...");
+
+  const rec = await fetchJSON("/scan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image: dataURL,
+      reference_id: currentRefId || null,
+      slot: idSlotSelect.value,
+      predicted_id_type: predictedType || "",
+    }),
+  });
+
+  setPreviewSrc(dataURL, false);
+  if (predictedType && !idTypeInput.value) idTypeInput.value = predictedType;
+
+  applyRecordToUI(rec);
+  setUploadMode(true);
+
+  lastScanSource = "camera";
+  lastCameraDataURL = dataURL;
+  setRetryEnabled(true);
+
+  return rec;
+}
+
+// =====================
 // EVENTS
 // =====================
 imgView.addEventListener("click", () => {
-  // ONLY open file picker in upload mode
   if (!cameraActive) inputFile.click();
 });
 
@@ -247,6 +340,27 @@ addSecondaryBtn.addEventListener("click", () => {
   inputFile.click();
 });
 
+// Retry
+retryBtn.addEventListener("click", async () => {
+  try {
+    if (lastScanSource === "camera" && lastCameraDataURL) {
+      await scanFromCameraDataURL(lastCameraDataURL);
+      return;
+    }
+    if (lastScanSource === "upload") {
+      alert("For uploads: please re-select the file to retry.");
+      inputFile.click();
+      return;
+    }
+    alert("Nothing to retry yet.");
+  } catch (err) {
+    alert("Retry failed: " + err.message);
+  } finally {
+    hideLoading();
+  }
+});
+
+// Upload scan
 inputFile.addEventListener("change", async () => {
   const file = inputFile.files[0];
   if (!file) return;
@@ -280,15 +394,22 @@ inputFile.addEventListener("change", async () => {
 
     applyRecordToUI(rec);
     setUploadMode(true);
+
+    lastScanSource = "upload";
+    setRetryEnabled(true);
   } catch (err) {
     try { URL.revokeObjectURL(imgSrc); } catch {}
     alert("Error scanning upload: " + err.message);
+    // if face-only / no ID detected, user can retry
+    lastScanSource = "upload";
+    setRetryEnabled(true);
   } finally {
     hideLoading();
     inputFile.value = "";
   }
 });
 
+// Snap camera
 snapBtn.addEventListener("click", async (e) => {
   e.stopPropagation();
 
@@ -297,35 +418,47 @@ snapBtn.addEventListener("click", async (e) => {
     return;
   }
 
-  const cvs = document.createElement("canvas");
-  cvs.width = camera.videoWidth;
-  cvs.height = camera.videoHeight;
-  cvs.getContext("2d").drawImage(camera, 0, 0, cvs.width, cvs.height);
+  // ✅ reduce size for speed
+  const targetW = 1280;
+  const scale = targetW / camera.videoWidth;
+  const w = targetW;
+  const h = Math.round(camera.videoHeight * scale);
 
-  const dataURL = cvs.toDataURL("image/jpeg", 0.92);
+  const cvs = document.createElement("canvas");
+  cvs.width = w;
+  cvs.height = h;
+  cvs.getContext("2d").drawImage(camera, 0, 0, w, h);
 
   try {
-    showLoading("Loading model...");
-
-    const img = new Image();
-    img.src = dataURL;
-    await new Promise((r) => (img.onload = r));
-    const predictedType = await predictIDType(img);
-
     showLoading("Scanning...");
 
-    const rec = await fetchJSON("/scan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        image: dataURL,
-        reference_id: currentRefId || null,
-        slot: idSlotSelect.value,
-        predicted_id_type: predictedType || "",
-      }),
-    });
+    // ✅ convert to blob (faster than base64)
+    const blob = await new Promise((resolve) =>
+      cvs.toBlob(resolve, "image/jpeg", 0.82)
+    );
 
-    setPreviewSrc(dataURL, false);
+    const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
+
+    // optional: predicted type via teachable machine
+    let predictedType = "";
+    try {
+      const img = new Image();
+      img.src = URL.createObjectURL(blob);
+      await new Promise((r) => (img.onload = r));
+      predictedType = await predictIDType(img);
+      URL.revokeObjectURL(img.src);
+    } catch {}
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    if (currentRefId) formData.append("reference_id", currentRefId);
+    formData.append("slot", idSlotSelect.value);
+    if (predictedType) formData.append("predicted_id_type", predictedType);
+
+    const rec = await fetchJSON("/upload", { method: "POST", body: formData });
+
+    setPreviewSrc(URL.createObjectURL(blob), true);
     if (predictedType && !idTypeInput.value) idTypeInput.value = predictedType;
 
     applyRecordToUI(rec);
@@ -378,34 +511,20 @@ exportBtn.addEventListener("click", async () => {
   URL.revokeObjectURL(url);
 });
 
-newGuestBtn.addEventListener("click", () => {
-  currentRefId = "";
+// New guest (also resets server record)
+newGuestBtn.addEventListener("click", async () => {
+  await resetAll({ resetServer: true });
+});
 
-  refIdInput.value = "";
-  ageInput.value = "";
-
-  idCategoryInput.value = "";
-  secondaryCountInput.value = "";
-  canProceedInput.value = "";
-
-  idTypeInput.value = "";
-  idNoInput.value = "";
-
-  firstNameInput.value = "";
-  middleNameInput.value = "";
-  lastNameInput.value = "";
-  dobInput.value = "";
-  genderInput.value = "";
-  contactInput.value = "";
-  addressInput.value = "";
-
-  exportBtn.disabled = true;
-  addSecondaryBtn.style.display = "none";
-
-  setUploadMode(false);
+// ✅ Reset fields when user returns via browser back (BFCache)
+window.addEventListener("pageshow", async (e) => {
+  if (e.persisted) {
+    await resetAll({ resetServer: true });
+  }
 });
 
 // init
 setUploadMode(false);
 exportBtn.disabled = true;
 addSecondaryBtn.style.display = "none";
+setRetryEnabled(false);
