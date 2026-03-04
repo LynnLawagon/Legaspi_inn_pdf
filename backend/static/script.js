@@ -44,9 +44,11 @@ let currentRefId = "";
 const PLACEHOLDER_SRC = previewImg.src;
 let currentObjectUrl = null;
 
-// Retry state
+// ✅ Retry state (works for BOTH upload + camera)
 let lastScanSource = null; // "camera" | "upload"
-let lastCameraDataURL = "";
+let lastScanFile = null;   // File
+let lastScanSlot = "primary";
+let lastPredictedType = "";
 
 // =====================
 // TEACHABLE MACHINE
@@ -107,7 +109,6 @@ async function fetchJSON(url, options) {
   }
 
   if (!res.ok) {
-    // Backend errors like: {"error":"No ID detected..."}
     throw new Error(
       (data.error || "Request failed") +
         (data.details ? " | " + data.details : "")
@@ -181,6 +182,18 @@ async function startCamera() {
   });
   camera.srcObject = stream;
   await camera.play();
+}
+
+// ✅ Unified scan function (used by Upload + Camera + Retry)
+async function scanFileToServer(file, { slot, predictedType } = {}) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  if (currentRefId) formData.append("reference_id", currentRefId);
+  formData.append("slot", slot || idSlotSelect.value);
+  if (predictedType) formData.append("predicted_id_type", predictedType);
+
+  return await fetchJSON("/upload", { method: "POST", body: formData });
 }
 
 // =====================
@@ -258,8 +271,12 @@ async function resetAll({ resetServer = false } = {}) {
   }
 
   currentRefId = "";
+
+  // ✅ clear retry state
   lastScanSource = null;
-  lastCameraDataURL = "";
+  lastScanFile = null;
+  lastScanSlot = "primary";
+  lastPredictedType = "";
   setRetryEnabled(false);
 
   refIdInput.value = "";
@@ -287,43 +304,6 @@ async function resetAll({ resetServer = false } = {}) {
 }
 
 // =====================
-// CAMERA SCAN (reusable for retry)
-// =====================
-async function scanFromCameraDataURL(dataURL) {
-  showLoading("Loading model...");
-
-  const img = new Image();
-  img.src = dataURL;
-  await new Promise((r) => (img.onload = r));
-  const predictedType = await predictIDType(img);
-
-  showLoading("Scanning...");
-
-  const rec = await fetchJSON("/scan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image: dataURL,
-      reference_id: currentRefId || null,
-      slot: idSlotSelect.value,
-      predicted_id_type: predictedType || "",
-    }),
-  });
-
-  setPreviewSrc(dataURL, false);
-  if (predictedType && !idTypeInput.value) idTypeInput.value = predictedType;
-
-  applyRecordToUI(rec);
-  setUploadMode(true);
-
-  lastScanSource = "camera";
-  lastCameraDataURL = dataURL;
-  setRetryEnabled(true);
-
-  return rec;
-}
-
-// =====================
 // EVENTS
 // =====================
 imgView.addEventListener("click", () => {
@@ -340,19 +320,24 @@ addSecondaryBtn.addEventListener("click", () => {
   inputFile.click();
 });
 
-// Retry
+// ✅ Retry (now actually retries upload OR camera)
 retryBtn.addEventListener("click", async () => {
   try {
-    if (lastScanSource === "camera" && lastCameraDataURL) {
-      await scanFromCameraDataURL(lastCameraDataURL);
+    if (!lastScanFile) {
+      alert("Nothing to retry yet.");
       return;
     }
-    if (lastScanSource === "upload") {
-      alert("For uploads: please re-select the file to retry.");
-      inputFile.click();
-      return;
-    }
-    alert("Nothing to retry yet.");
+
+    showLoading("Retrying scan...");
+
+    const rec = await scanFileToServer(lastScanFile, {
+      slot: lastScanSlot,
+      predictedType: lastPredictedType,
+    });
+
+    applyRecordToUI(rec);
+    setUploadMode(true);
+    setRetryEnabled(true);
   } catch (err) {
     alert("Retry failed: " + err.message);
   } finally {
@@ -380,14 +365,10 @@ inputFile.addEventListener("change", async () => {
 
     showLoading("Scanning...");
 
-    const formData = new FormData();
-    formData.append("file", file);
-
-    if (currentRefId) formData.append("reference_id", currentRefId);
-    formData.append("slot", idSlotSelect.value);
-    if (predictedType) formData.append("predicted_id_type", predictedType);
-
-    const rec = await fetchJSON("/upload", { method: "POST", body: formData });
+    const rec = await scanFileToServer(file, {
+      slot: idSlotSelect.value,
+      predictedType,
+    });
 
     setPreviewSrc(imgSrc, true);
     if (predictedType && !idTypeInput.value) idTypeInput.value = predictedType;
@@ -395,13 +376,21 @@ inputFile.addEventListener("change", async () => {
     applyRecordToUI(rec);
     setUploadMode(true);
 
+    // ✅ Save for retry
     lastScanSource = "upload";
+    lastScanFile = file;
+    lastScanSlot = idSlotSelect.value;
+    lastPredictedType = predictedType || "";
     setRetryEnabled(true);
   } catch (err) {
     try { URL.revokeObjectURL(imgSrc); } catch {}
     alert("Error scanning upload: " + err.message);
-    // if face-only / no ID detected, user can retry
+
+    // ✅ Still allow retry with same file
     lastScanSource = "upload";
+    lastScanFile = file;
+    lastScanSlot = idSlotSelect.value;
+    lastPredictedType = "";
     setRetryEnabled(true);
   } finally {
     hideLoading();
@@ -430,39 +419,46 @@ snapBtn.addEventListener("click", async (e) => {
   cvs.getContext("2d").drawImage(camera, 0, 0, w, h);
 
   try {
-    showLoading("Scanning...");
+    showLoading("Loading model...");
 
-    // ✅ convert to blob (faster than base64)
     const blob = await new Promise((resolve) =>
       cvs.toBlob(resolve, "image/jpeg", 0.82)
     );
+
+    if (!blob) throw new Error("Failed to capture image.");
 
     const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
 
     // optional: predicted type via teachable machine
     let predictedType = "";
     try {
+      const tmpUrl = URL.createObjectURL(blob);
       const img = new Image();
-      img.src = URL.createObjectURL(blob);
+      img.src = tmpUrl;
       await new Promise((r) => (img.onload = r));
       predictedType = await predictIDType(img);
-      URL.revokeObjectURL(img.src);
+      URL.revokeObjectURL(tmpUrl);
     } catch {}
 
-    const formData = new FormData();
-    formData.append("file", file);
+    showLoading("Scanning...");
 
-    if (currentRefId) formData.append("reference_id", currentRefId);
-    formData.append("slot", idSlotSelect.value);
-    if (predictedType) formData.append("predicted_id_type", predictedType);
-
-    const rec = await fetchJSON("/upload", { method: "POST", body: formData });
+    const rec = await scanFileToServer(file, {
+      slot: idSlotSelect.value,
+      predictedType,
+    });
 
     setPreviewSrc(URL.createObjectURL(blob), true);
     if (predictedType && !idTypeInput.value) idTypeInput.value = predictedType;
 
     applyRecordToUI(rec);
     setUploadMode(true);
+
+    // ✅ Save for retry (camera too)
+    lastScanSource = "camera";
+    lastScanFile = file;
+    lastScanSlot = idSlotSelect.value;
+    lastPredictedType = predictedType || "";
+    setRetryEnabled(true);
   } catch (err) {
     alert("Error scanning camera: " + err.message);
   } finally {
@@ -528,3 +524,12 @@ setUploadMode(false);
 exportBtn.disabled = true;
 addSecondaryBtn.style.display = "none";
 setRetryEnabled(false);
+
+// ✅ Safety: ensure buttons don’t submit forms
+try { retryBtn.type = "button"; } catch {}
+try { toggleBtn.type = "button"; } catch {}
+try { snapBtn.type = "button"; } catch {}
+try { recalcBtn.type = "button"; } catch {}
+try { exportBtn.type = "button"; } catch {}
+try { newGuestBtn.type = "button"; } catch {}
+try { addSecondaryBtn.type = "button"; } catch {}
