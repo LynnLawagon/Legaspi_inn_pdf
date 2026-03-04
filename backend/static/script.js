@@ -26,6 +26,7 @@ const canProceedInput = document.getElementById("can-proceed");
 
 const idTypeInput = document.getElementById("id-type");
 const idNoInput = document.getElementById("id-no");
+const backHomeBtn = document.getElementById("back-home-btn");
 
 const firstNameInput = document.getElementById("first-name");
 const middleNameInput = document.getElementById("middle-name");
@@ -182,6 +183,12 @@ async function startCamera() {
   });
   camera.srcObject = stream;
   await camera.play();
+}
+
+if (backHomeBtn) {
+  backHomeBtn.addEventListener("click", () => {
+    window.location.href = "/";
+  });
 }
 
 // ✅ Unified scan function (used by Upload + Camera + Retry)

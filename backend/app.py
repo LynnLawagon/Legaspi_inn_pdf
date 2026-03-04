@@ -37,8 +37,8 @@ reader = None
 def get_reader():
     global reader
     if reader is None:
-        # gpu=False = stable for Windows
-        reader = easyocr.Reader(["en"], gpu=False)
+        # ✅ Filipino + English helps PhilID labels; remove "tl" if you want faster
+        reader = easyocr.Reader(["en", "tl"], gpu=False)
     return reader
 
 # in-memory records
@@ -77,7 +77,8 @@ def compute_age(dob_str: str):
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     return age if 0 <= age <= 130 else None
 
-def safe_resize(img, target_w=1200):
+def safe_resize(img, target_w=900):
+    """✅ smaller width = faster OCR, good for camera"""
     h, w = img.shape[:2]
     if w <= target_w:
         return img
@@ -118,7 +119,6 @@ def guess_id_category(full_text_upper: str) -> str:
         return "Primary"
     if any(k in t for k in SECONDARY_KEYWORDS):
         return "Secondary"
-    # PHILID words
     if "PAMBANSANG" in t or "PAGKAKAKILANLAN" in t:
         return "Primary"
     return "Unknown"
@@ -132,7 +132,7 @@ def can_proceed(record: dict) -> bool:
     return False
 
 # -----------------------
-# OCR + PARSING (BETTER)
+# OCR + PARSING (FAST + BETTER NAMES)
 # -----------------------
 STOPWORDS = {
     "REPUBLIC", "PHILIPPINES", "PHILIPPINE", "IDENTIFICATION", "CARD", "NATIONAL", "ID",
@@ -140,15 +140,17 @@ STOPWORDS = {
     "SIGNATURE", "ISSUED", "VALID", "BARANGAY", "CLEARANCE", "CERTIFICATE", "PSA",
     "PAMBANSANG", "PAGKAKAKILANLAN", "PILIPINAS",
     "APELYIDO", "GIVEN", "MIDDLE", "NAME", "PANGALAN", "KAPANGANAKAN", "KASARIAN",
+
+    # school noise
+    "SENIOR", "HIGH", "SCHOOL", "STUDENT", "SIGN", "NO", "NUMBER",
+    "COLLEGE", "UNIVERSITY", "CAMPUS", "DEPARTMENT", "CITY", "PROVINCE",
+    "VALIDITY", "TERM", "SY", "GRADE", "SECTION", "LRN",
 }
 
 def preprocess(img_bgr):
-    # ✅ speed: resize
-    img_bgr = safe_resize(img_bgr, target_w=1200)
-
+    img_bgr = safe_resize(img_bgr, target_w=900)
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     gray = cv2.bilateralFilter(gray, 7, 50, 50)
-    # adaptive thresh helps labels
     thr = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -158,22 +160,16 @@ def preprocess(img_bgr):
     return gray, thr
 
 def ocr_items(img):
-    """
-    returns list of:
-      {text, conf, cx, cy, y1, y2}
-    sorted top-to-bottom
-    """
     r = get_reader()
     res = r.readtext(
         img,
         detail=1,
         paragraph=False,
-        # ✅ speed / quality tweaks
-        batch_size=8,
-        text_threshold=0.6,
-        low_text=0.35,
-        link_threshold=0.35,
-        mag_ratio=1.5
+        batch_size=16,
+        text_threshold=0.55,
+        low_text=0.30,
+        link_threshold=0.30,
+        mag_ratio=1.2
     )
 
     items = []
@@ -202,72 +198,99 @@ def ocr_items(img):
 
 def clean_name(s: str) -> str:
     s = (s or "").upper()
-    s = re.sub(r"[^A-Z\s\-]", " ", s)
+    s = re.sub(r"[^A-Z\s\-\.]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
-    toks = [t for t in s.split() if t not in STOPWORDS]
+    toks = []
+    for t in s.split():
+        t2 = t.strip(".")
+        if not t2:
+            continue
+        if t2 in STOPWORDS:
+            continue
+        toks.append(t2)
     return " ".join(toks).strip()
 
 def looks_like_name(s: str) -> bool:
     if not s:
         return False
     toks = s.split()
-    if not (1 <= len(toks) <= 5):
+    if not (1 <= len(toks) <= 6):
         return False
-    if any(len(t) < 2 for t in toks):
+    if any(len(t) < 2 for t in toks if t != "-"):
         return False
-    # avoid header words
-    if "PAMBANSANG" in s or "PAGKAKAKILANLAN" in s:
+    bad = {"REPUBLIC", "PHILIPPINES", "PAMBANSANG", "PAGKAKAKILANLAN",
+           "PHILIPPINE", "IDENTIFICATION", "CARD", "STUDENT", "SCHOOL"}
+    if any(b in toks for b in bad):
         return False
     return True
 
 def get_value_near_label(items, label_variants, max_lines_ahead=8):
-    """
-    Find label line, then return best next line (below) that looks like a name/value.
-    """
     texts = [x["text"] for x in items]
     for i, t in enumerate(texts):
-        tt = t.upper()
-        if any(v in tt for v in label_variants):
-            for j in range(i + 1, min(i + 1 + max_lines_ahead, len(texts))):
-                cand = clean_name(texts[j])
-                if looks_like_name(cand):
-                    return cand
+        tt = (t or "").upper()
+
+        hit = None
+        for v in label_variants:
+            if v in tt:
+                hit = v
+                break
+        if not hit:
+            continue
+
+        # ✅ SAME LINE value (PhilID OCR often merges label+value)
+        after = tt.split(hit, 1)[-1].strip()
+        after = clean_name(after)
+        if looks_like_name(after):
+            return after
+
+        # ✅ NEXT LINE value
+        for j in range(i + 1, min(i + 1 + max_lines_ahead, len(texts))):
+            cand = clean_name(texts[j])
+            if looks_like_name(cand):
+                return cand
     return ""
 
-def extract_philid_names(items, full_text):
-    # label-based first
+def extract_school_fullname(items):
+    cands = []
+    for it in items:
+        if it["conf"] < 0.45:
+            continue
+        s = clean_name(it["text"])
+        toks = s.split()
+        if not (2 <= len(toks) <= 6):
+            continue
+        bad = {"SCHOOL", "STUDENT", "SIGNATURE", "SENIOR", "HIGH", "COLLEGE",
+               "UNIVERSITY", "ID", "NO", "VALID", "TERM", "SY"}
+        if any(b in toks for b in bad):
+            continue
+        cands.append((it["cy"], s))
+    cands.sort(key=lambda x: x[0], reverse=True)
+    return cands[0][1] if cands else ""
+
+def extract_names(items, full_text):
     last = get_value_near_label(items, ["APELYIDO", "LAST NAME", "SURNAME"])
     first = get_value_near_label(items, ["MGA PANGALAN", "GIVEN NAMES", "GIVEN NAME", "FIRST NAME"])
     middle = get_value_near_label(items, ["GITNANG APELYIDO", "MIDDLE NAME"])
 
-    # fallback: find 2-3 consecutive name lines under the header area
     if not (first and last):
-        # choose top candidates (high conf) excluding stopwords
-        cands = []
-        for it in items:
-            if it["conf"] < 0.45:
-                continue
-            cand = clean_name(it["text"])
-            if looks_like_name(cand):
-                cands.append(cand)
-        # remove duplicates
-        seen = set()
-        cands2 = []
-        for c in cands:
-            if c not in seen:
-                seen.add(c)
-                cands2.append(c)
+        full = get_value_near_label(items, ["FULL NAME", "STUDENT NAME", "NAME"], max_lines_ahead=6)
+        if full:
+            toks = clean_name(full).split()
+            if len(toks) >= 2:
+                first = first or toks[0]
+                last = last or toks[-1]
+                if len(toks) > 2:
+                    middle = middle or " ".join(toks[1:-1])
 
-        # try best combo (3 lines: last/first/middle)
-        if len(cands2) >= 2:
-            # heuristic: if 3 candidates exist, assume last/first/middle
-            if len(cands2) >= 3 and not middle:
-                last = last or cands2[0]
-                first = first or cands2[1]
-                middle = middle or cands2[2]
-            else:
-                first = first or cands2[0]
-                last = last or cands2[1]
+    if not (first and last):
+        full2 = extract_school_fullname(items)
+        if full2:
+            toks = clean_name(full2).split()
+            if len(toks) >= 2:
+                first = first or toks[0]
+                last = last or toks[-1]
+                if len(toks) > 2:
+                    middle = middle or " ".join(toks[1:-1])
 
     return first, middle, last
 
@@ -279,7 +302,6 @@ def extract_id_number(full_text_upper: str):
     m2 = re.search(r"\b\d{16}\b", t)
     if m2:
         return m2.group(0)
-    # fallback any long digits with hyphen style
     m3 = re.search(r"\b\d{3,}-\d{3,}-\d{3,}\b", t)
     if m3:
         return m3.group(0)
@@ -305,7 +327,6 @@ def extract_dob(full_text):
         except Exception:
             pass
 
-    # philid format is usually "JANUARY 28, 2006" (with comma)
     m3 = re.search(
         r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2},\s+\d{4}",
         full_text
@@ -320,11 +341,9 @@ def extract_dob(full_text):
 
 def extract_address(full_text):
     t = (full_text or "").upper()
-    # best-effort: get text after TIRAHAN/ADDRESS
     m = re.search(r"(TIRAHAN|ADDRESS)\s*[:\-]?\s*(.+)", t)
     if m:
         return m.group(2).strip()
-    # fallback: find CITY / BARANGAY lines
     m2 = re.search(r"\bBARANGAY\b\s+(.+)", t)
     if m2:
         return m2.group(0).strip()
@@ -335,18 +354,35 @@ def extract_gender(full_text):
     m = re.search(r"\b(SEX|GENDER)\b\s*[:\-]?\s*([A-Z])\b", t)
     return m.group(2) if m else ""
 
+def crop_roi(img, x1, y1, x2, y2):
+    h, w = img.shape[:2]
+    x1 = max(0, int(x1 * w)); x2 = min(w, int(x2 * w))
+    y1 = max(0, int(y1 * h)); y2 = min(h, int(y2 * h))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return img[y1:y2, x1:x2]
+
 def parse_fields_from_image(img_bgr):
-    gray, thr = preprocess(img_bgr)
+    gray, _thr = preprocess(img_bgr)
 
-    items, full1 = ocr_items(thr)
-    if len(full1.strip()) < 10:
-        items, full1 = ocr_items(gray)
+    # ✅ OCR only important zones (FAST)
+    roi_idno   = crop_roi(gray, 0.02, 0.18, 0.55, 0.33)
+    roi_names  = crop_roi(gray, 0.52, 0.30, 0.98, 0.78)
+    roi_addr   = crop_roi(gray, 0.02, 0.76, 0.75, 0.98)
+    roi_school = crop_roi(gray, 0.05, 0.55, 0.95, 0.90)
 
-    full_text = full1.upper()
+    items_all = []
+    full_parts = []
+    for roi in [roi_idno, roi_names, roi_addr, roi_school]:
+        if roi is None:
+            continue
+        items, full = ocr_items(roi)
+        items_all.extend(items)
+        full_parts.append(full)
 
-    # Names (PhilID tuned)
-    first, middle, last = extract_philid_names(items, full_text)
+    full_text = " ".join(full_parts).upper()
 
+    first, middle, last = extract_names(items_all, full_text)
     dob = extract_dob(full_text)
     id_no = extract_id_number(full_text)
     address = extract_address(full_text)
@@ -464,7 +500,7 @@ def reset_record():
     return jsonify({"ok": True}), 200
 
 # -----------------------
-# UPLOAD (used by BOTH upload + camera now)
+# UPLOAD (optimized: decode in-memory first)
 # -----------------------
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -480,26 +516,58 @@ def upload():
         slot = request.form.get("slot", "secondary")
         predicted_id_type = request.form.get("predicted_id_type", "")
 
-        filename = secure_filename(file.filename)
+        filename = secure_filename(file.filename or "upload.jpg")
         ext = os.path.splitext(filename)[1].lower()
+
+        if ext not in ALLOWED_EXT:
+            mt = (file.mimetype or "").lower()
+            if "jpeg" in mt or "jpg" in mt:
+                ext = ".jpg"
+                if not filename.lower().endswith(".jpg"):
+                    filename += ".jpg"
+            elif "png" in mt:
+                ext = ".png"
+                if not filename.lower().endswith(".png"):
+                    filename += ".png"
+            elif "pdf" in mt:
+                ext = ".pdf"
+                if not filename.lower().endswith(".pdf"):
+                    filename += ".pdf"
+
         if ext not in ALLOWED_EXT:
             return json_error("Invalid file type. Use JPG/PNG/WEBP or PDF.", 400)
 
-        unique = f"upload_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}_{filename}"
-        saved_path = os.path.join(UPLOAD_FOLDER, unique)
-        file.save(saved_path)
-        img_path_db = f"uploads/{unique}"
+        data = file.read()
+        if not data:
+            return json_error("Empty file", 400)
 
+        # Decode in-memory
         if ext == ".pdf":
+            unique = f"upload_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}_{filename}"
+            saved_path = os.path.join(UPLOAD_FOLDER, unique)
+            with open(saved_path, "wb") as f:
+                f.write(data)
+
             img, err = pdf_first_page_to_bgr(saved_path)
             if err:
                 return json_error("PDF error", 500, details=err)
             if img is None:
                 return json_error("Could not read PDF", 400)
+
+            img_path_db = f"uploads/{unique}"
+
         else:
-            img = cv2.imread(saved_path)
+            nparr = np.frombuffer(data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if img is None:
                 return json_error("Could not read the uploaded image", 400)
+
+            unique = f"upload_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}_{filename}"
+            saved_path = os.path.join(UPLOAD_FOLDER, unique)
+            with open(saved_path, "wb") as f:
+                f.write(data)
+
+            img_path_db = f"uploads/{unique}"
 
         extracted, err = parse_fields_from_image(img)
         if err:
@@ -514,7 +582,7 @@ def upload():
         return json_error("Server error while scanning", 500, details=str(e))
 
 # -----------------------
-# PDF EXPORT (same as yours)
+# PDF EXPORT
 # -----------------------
 def wrap_text_by_width(c, text, max_width, font_name="Helvetica", font_size=11):
     text = (text or "").replace("\n", " ").strip()
