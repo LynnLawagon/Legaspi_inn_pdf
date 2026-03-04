@@ -492,26 +492,55 @@ exportBtn.addEventListener("click", async () => {
     Address: addressInput.value.trim(),
   };
 
-  const res = await fetch("/export-pdf", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  try {
 
-  if (!res.ok) {
-    alert("Export failed: " + (await res.text()));
-    return;
+    // ✅ 1 SAVE TO DATABASE
+    const saveRes = await fetch("/save-guest", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const saveData = await saveRes.json();
+
+    if (!saveRes.ok) {
+      alert("Database save failed: " + (saveData.error || ""));
+      return;
+    }
+
+    // ✅ 2 GENERATE PDF
+    const pdfRes = await fetch("/export-pdf", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!pdfRes.ok) {
+      alert("Export failed");
+      return;
+    }
+
+    const blob = await pdfRes.blob();
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${payload.reference_id}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+
+    alert("Guest saved to database successfully!");
+
+  } catch (err) {
+    alert("Error: " + err.message);
   }
-
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${currentRefId || "guest"}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 });
 
 // New guest (also resets server record)

@@ -6,6 +6,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
+from db import get_conn
 import os, re, cv2, traceback, random
 import numpy as np
 from datetime import datetime, date
@@ -54,6 +55,20 @@ def home():
 @app.route("/scan-page")
 def scan_page():
     return render_template("index.html")
+
+# database connection test route
+@app.route("/test-db")
+def test_db():
+    try:
+        conn = get_conn()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM tbl_guests")
+        data = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return jsonify({"ok": True, "data": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # -----------------------
 # HELPERS
@@ -580,6 +595,108 @@ def upload():
     except Exception as e:
         traceback.print_exc()
         return json_error("Server error while scanning", 500, details=str(e))
+    
+def get_gender_id(gender_text: str):
+    """Convert 'Male/Female' (or 'M/F') to Gender_id from tbl_gender."""
+    g = (gender_text or "").strip().upper()
+    if not g:
+        return None
+
+    # quick normalize
+    if g in ["M", "MALE"]:
+        name = "Male"
+    elif g in ["F", "FEMALE"]:
+        name = "Female"
+    else:
+        # try to match exact name
+        name = gender_text.strip()
+
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT Gender_id FROM tbl_gender WHERE gender_name=%s LIMIT 1", (name,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row["Gender_id"] if row else None
+
+
+@app.route("/save-guest", methods=["POST"])
+def save_guest():
+    try:
+        payload = request.get_json(silent=True) or {}
+
+        ref = payload.get("reference_id") or payload.get("Reference_id")
+        if not ref:
+            return json_error("Missing reference_id", 400)
+
+        # get record from memory (OCR record)
+        record = RECORDS.get(ref)
+        if not record:
+            return json_error("No record found for that Reference ID.", 404)
+
+        # apply manual form edits
+        apply_manual_overrides(record, payload)
+
+        guest = record.get("Guest") or {}
+
+        # convert Gender text → Gender_id
+        gender_id = payload.get("Gender_id")
+        if gender_id is None:
+            gender_id = get_gender_id(guest.get("Gender", ""))
+
+        if gender_id is None:
+            return json_error("Gender not recognized. Please select Male or Female.", 400)
+
+        # choose image path
+        img_rel = ""
+        if record.get("Primary_id") and record["Primary_id"].get("Img_path"):
+            img_rel = record["Primary_id"]["Img_path"]
+        elif record.get("Secondary_ids"):
+            img_rel = (record["Secondary_ids"][0] or {}).get("Img_path", "")
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        sql = """
+        INSERT INTO tbl_guests
+        (Reference_id, ID_type, ID_no, First_name, Middle_name, Last_name,
+        Date_of_birth, Gender_id, Contact, Address, Img_path,
+        ID_category, Secondary_count, Can_proceed)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+
+        cur.execute(sql, (
+            ref,
+            guest.get("ID_type",""),
+            guest.get("ID_no",""),
+            guest.get("First_name",""),
+            guest.get("Middle_name",""),
+            guest.get("Last_name",""),
+            guest.get("Date_of_birth") or None,
+            int(gender_id),
+            guest.get("Contact",""),
+            guest.get("Address",""),
+            img_rel or "",
+            record.get("ID_category",""),
+            record.get("Secondary_count",0),
+            1 if record.get("Can_proceed") else 0
+        ))
+
+        new_id = cur.lastrowid
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "ok": True,
+            "saved_id": new_id,
+            "reference_id": ref
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return json_error("DB save failed", 500, details=str(e))
 
 # -----------------------
 # PDF EXPORT
@@ -605,6 +722,29 @@ def wrap_text_by_width(c, text, max_width, font_name="Helvetica", font_size=11):
     if cur:
         lines.append(cur)
     return lines
+
+def get_gender_id(gender_text: str):
+    """Convert 'Male/Female' (or 'M/F') to Gender_id from tbl_gender."""
+    g = (gender_text or "").strip().upper()
+    if not g:
+        return None
+
+    # normalize
+    if g in ["M", "MALE"]:
+        name = "Male"
+    elif g in ["F", "FEMALE"]:
+        name = "Female"
+    else:
+        name = gender_text.strip()
+
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT Gender_id FROM tbl_gender WHERE gender_name=%s LIMIT 1", (name,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    return row["Gender_id"] if row else None
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
