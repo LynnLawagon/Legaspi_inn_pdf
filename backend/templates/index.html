@@ -13,26 +13,23 @@
     <input type="file" id="input-file" accept="image/*,.pdf" style="display:none;" />
 
     <div id="img-view">
-      <!-- FIXED MEDIA BOX: upload icon / captured image / camera preview all live here -->
       <div class="media-box">
         <img id="preview-img" src="{{ url_for('static', filename='img/upload.png') }}" alt="Preview"/>
         <video id="camera" autoplay playsinline></video>
 
-        <!-- Button is now right-center (vertical) -->
         <button id="snap-btn" type="button" aria-label="Snap Photo">
           <img src="{{ url_for('static', filename='img/camera.png') }}" alt="Camera">
         </button>
 
-        <!-- Loading overlay stays inside the media box -->
         <div id="loading-indicator">Scanning...</div>
       </div>
 
       <p id="drop-text">Upload your ID here</p>
       <span>Supports School ID / National ID (Primary) and Birth Certification / Barangay Clearance (Secondary)</span>
     </div>
-    <button id="back-home-btn" class = "back-home-btn">Back to Home</button>
+
+    <button id="back-home-btn" class="back-home-btn">Back to Home</button>
   </div>
-  
 
   <div id="ocr-results">
     <h2>Results</h2>
@@ -70,9 +67,21 @@
     <div class="form-group"><label>First Name:</label><input id="first-name"/></div>
     <div class="form-group"><label>Middle Name:</label><input id="middle-name"/></div>
     <div class="form-group"><label>Last Name:</label><input id="last-name"/></div>
+
     <div class="form-group"><label>Date of Birth:</label><input id="dob" placeholder="YYYY-MM-DD"/></div>
-    <div class="form-group"><label>Gender:</label><input id="gender"/></div>
-    <div class="form-group"><label>Contact:</label><input id="contact"/></div>
+
+    <!-- ✅ Gender from tbl_gender -->
+    <div class="form-group">
+      <label>Gender:</label>
+      <select id="gender_id"></select>
+    </div>
+
+    <!-- ✅ Contact: 11 digits only -->
+    <div class="form-group">
+      <label>Contact:</label>
+      <input id="contact" inputmode="numeric" maxlength="11" placeholder="09XXXXXXXXX"/>
+    </div>
+
     <div class="form-group"><label>Address:</label><input id="address"/></div>
 
     <div class="btn-row">

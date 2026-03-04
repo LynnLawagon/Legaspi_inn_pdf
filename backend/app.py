@@ -38,7 +38,7 @@ reader = None
 def get_reader():
     global reader
     if reader is None:
-        # ✅ Filipino + English helps PhilID labels; remove "tl" if you want faster
+        # Filipino + English helps PhilID labels; remove "tl" if you want faster
         reader = easyocr.Reader(["en", "tl"], gpu=False)
     return reader
 
@@ -70,6 +70,21 @@ def test_db():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+# ✅ genders list from tbl_gender (for dropdown)
+@app.route("/meta/genders", methods=["GET"])
+def meta_genders():
+    try:
+        conn = get_conn()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT Gender_id, gender_name FROM tbl_gender ORDER BY Gender_id ASC")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify(rows), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "Failed to load genders", "details": str(e)}), 500
+
 # -----------------------
 # HELPERS
 # -----------------------
@@ -77,6 +92,30 @@ def json_error(msg, code=400, **extra):
     payload = {"error": msg}
     payload.update(extra)
     return jsonify(payload), code
+
+def normalize_contact(contact: str) -> str:
+    # keep digits only
+    return re.sub(r"\D", "", contact or "")
+
+def is_valid_contact_11(contact: str) -> bool:
+    # exactly 11 digits
+    return bool(re.fullmatch(r"\d{11}", contact or ""))  # for PH mobile strict: r"09\d{9}"
+
+def gender_exists(gender_id):
+    """Return {Gender_id, gender_name} if exists else None."""
+    if gender_id is None:
+        return None
+    s = str(gender_id).strip()
+    if not s:
+        return None
+
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT Gender_id, gender_name FROM tbl_gender WHERE Gender_id=%s LIMIT 1", (s,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row
 
 def generate_reference_id():
     return f"REF-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}"
@@ -93,7 +132,7 @@ def compute_age(dob_str: str):
     return age if 0 <= age <= 130 else None
 
 def safe_resize(img, target_w=900):
-    """✅ smaller width = faster OCR, good for camera"""
+    """smaller width = faster OCR, good for camera"""
     h, w = img.shape[:2]
     if w <= target_w:
         return img
@@ -155,8 +194,6 @@ STOPWORDS = {
     "SIGNATURE", "ISSUED", "VALID", "BARANGAY", "CLEARANCE", "CERTIFICATE", "PSA",
     "PAMBANSANG", "PAGKAKAKILANLAN", "PILIPINAS",
     "APELYIDO", "GIVEN", "MIDDLE", "NAME", "PANGALAN", "KAPANGANAKAN", "KASARIAN",
-
-    # school noise
     "SENIOR", "HIGH", "SCHOOL", "STUDENT", "SIGN", "NO", "NUMBER",
     "COLLEGE", "UNIVERSITY", "CAMPUS", "DEPARTMENT", "CITY", "PROVINCE",
     "VALIDITY", "TERM", "SY", "GRADE", "SECTION", "LRN",
@@ -252,13 +289,13 @@ def get_value_near_label(items, label_variants, max_lines_ahead=8):
         if not hit:
             continue
 
-        # ✅ SAME LINE value (PhilID OCR often merges label+value)
+        # SAME LINE value (PhilID OCR often merges label+value)
         after = tt.split(hit, 1)[-1].strip()
         after = clean_name(after)
         if looks_like_name(after):
             return after
 
-        # ✅ NEXT LINE value
+        # NEXT LINE value
         for j in range(i + 1, min(i + 1 + max_lines_ahead, len(texts))):
             cand = clean_name(texts[j])
             if looks_like_name(cand):
@@ -380,7 +417,7 @@ def crop_roi(img, x1, y1, x2, y2):
 def parse_fields_from_image(img_bgr):
     gray, _thr = preprocess(img_bgr)
 
-    # ✅ OCR only important zones (FAST)
+    # OCR only important zones (FAST)
     roi_idno   = crop_roi(gray, 0.02, 0.18, 0.55, 0.33)
     roi_names  = crop_roi(gray, 0.52, 0.30, 0.98, 0.78)
     roi_addr   = crop_roi(gray, 0.02, 0.76, 0.75, 0.98)
@@ -408,7 +445,7 @@ def parse_fields_from_image(img_bgr):
         "Middle_name": middle,
         "Last_name": last,
         "Date_of_birth": dob,
-        "Gender": gender,
+        "Gender": gender,     # OCR may output "M"/"F" but DB save uses Gender_id from dropdown
         "Contact": "",
         "Address": address,
         "ID_no": id_no,
@@ -422,7 +459,7 @@ def parse_fields_from_image(img_bgr):
 def handle_exception(e):
     if isinstance(e, HTTPException):
         return e
-    if request.path in ["/upload", "/export-pdf", "/reset-record"]:
+    if request.path in ["/upload", "/export-pdf", "/reset-record", "/save-guest", "/meta/genders"]:
         traceback.print_exc()
         return json_error("Server error", 500, details=str(e))
     raise e
@@ -491,13 +528,19 @@ def merge_extracted_into_record(extracted: dict, ref: str, slot: str, predicted_
 
 def apply_manual_overrides(record: dict, payload: dict):
     g = record.get("Guest", {})
+
     def pick(key):
         v = payload.get(key)
         return None if v is None else str(v).strip()
-    for k in ["ID_type", "ID_no", "First_name", "Middle_name", "Last_name", "Date_of_birth", "Gender", "Contact", "Address"]:
+
+    for k in ["ID_type", "ID_no", "First_name", "Middle_name", "Last_name",
+              "Date_of_birth", "Gender", "Contact", "Address"]:
         v = pick(k)
         if v is not None:
+            if k == "Contact":
+                v = normalize_contact(v)  # digits only
             g[k] = v
+
     g["Age"] = compute_age(g.get("Date_of_birth") or "")
     record["Guest"] = g
     record["Can_proceed"] = can_proceed(record)
@@ -595,31 +638,10 @@ def upload():
     except Exception as e:
         traceback.print_exc()
         return json_error("Server error while scanning", 500, details=str(e))
-    
-def get_gender_id(gender_text: str):
-    """Convert 'Male/Female' (or 'M/F') to Gender_id from tbl_gender."""
-    g = (gender_text or "").strip().upper()
-    if not g:
-        return None
 
-    # quick normalize
-    if g in ["M", "MALE"]:
-        name = "Male"
-    elif g in ["F", "FEMALE"]:
-        name = "Female"
-    else:
-        # try to match exact name
-        name = gender_text.strip()
-
-    conn = get_conn()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT Gender_id FROM tbl_gender WHERE gender_name=%s LIMIT 1", (name,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row["Gender_id"] if row else None
-
-
+# -----------------------
+# SAVE GUEST (DB)
+# -----------------------
 @app.route("/save-guest", methods=["POST"])
 def save_guest():
     try:
@@ -629,23 +651,29 @@ def save_guest():
         if not ref:
             return json_error("Missing reference_id", 400)
 
-        # get record from memory (OCR record)
         record = RECORDS.get(ref)
         if not record:
             return json_error("No record found for that Reference ID.", 404)
 
         # apply manual form edits
         apply_manual_overrides(record, payload)
-
         guest = record.get("Guest") or {}
 
-        # convert Gender text → Gender_id
-        gender_id = payload.get("Gender_id")
-        if gender_id is None:
-            gender_id = get_gender_id(guest.get("Gender", ""))
+        # ✅ CONTACT: digits-only + must be EXACT 11 digits
+        contact = normalize_contact(guest.get("Contact", ""))
+        if contact and not is_valid_contact_11(contact):
+            return json_error("Contact must be exactly 11 digits.", 400)
+        guest["Contact"] = contact
 
-        if gender_id is None:
-            return json_error("Gender not recognized. Please select Male or Female.", 400)
+        # ✅ GENDER: must come from tbl_gender via Gender_id
+        gender_id = payload.get("Gender_id")
+        row = gender_exists(gender_id)
+        if not row:
+            return json_error("Please select Gender from the list.", 400)
+
+        # store readable gender name for PDF display
+        guest["Gender"] = row["gender_name"]
+        record["Guest"] = guest
 
         # choose image path
         img_rel = ""
@@ -660,8 +688,8 @@ def save_guest():
         sql = """
         INSERT INTO tbl_guests
         (Reference_id, ID_type, ID_no, First_name, Middle_name, Last_name,
-        Date_of_birth, Gender_id, Contact, Address, Img_path,
-        ID_category, Secondary_count, Can_proceed)
+         Date_of_birth, Gender_id, Contact, Address, Img_path,
+         ID_category, Secondary_count, Can_proceed)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """
 
@@ -673,17 +701,16 @@ def save_guest():
             guest.get("Middle_name",""),
             guest.get("Last_name",""),
             guest.get("Date_of_birth") or None,
-            int(gender_id),
+            int(row["Gender_id"]),
             guest.get("Contact",""),
             guest.get("Address",""),
             img_rel or "",
             record.get("ID_category",""),
-            record.get("Secondary_count",0),
+            int(record.get("Secondary_count", 0) or 0),
             1 if record.get("Can_proceed") else 0
         ))
 
         new_id = cur.lastrowid
-
         conn.commit()
         cur.close()
         conn.close()
@@ -722,29 +749,6 @@ def wrap_text_by_width(c, text, max_width, font_name="Helvetica", font_size=11):
     if cur:
         lines.append(cur)
     return lines
-
-def get_gender_id(gender_text: str):
-    """Convert 'Male/Female' (or 'M/F') to Gender_id from tbl_gender."""
-    g = (gender_text or "").strip().upper()
-    if not g:
-        return None
-
-    # normalize
-    if g in ["M", "MALE"]:
-        name = "Male"
-    elif g in ["F", "FEMALE"]:
-        name = "Female"
-    else:
-        name = gender_text.strip()
-
-    conn = get_conn()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT Gender_id FROM tbl_gender WHERE gender_name=%s LIMIT 1", (name,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-
-    return row["Gender_id"] if row else None
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():

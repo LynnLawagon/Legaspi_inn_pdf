@@ -32,7 +32,10 @@ const firstNameInput = document.getElementById("first-name");
 const middleNameInput = document.getElementById("middle-name");
 const lastNameInput = document.getElementById("last-name");
 const dobInput = document.getElementById("dob");
-const genderInput = document.getElementById("gender");
+
+// ✅ Gender is now a SELECT
+const genderSelect = document.getElementById("gender_id");
+
 const contactInput = document.getElementById("contact");
 const addressInput = document.getElementById("address");
 
@@ -50,6 +53,9 @@ let lastScanSource = null; // "camera" | "upload"
 let lastScanFile = null;   // File
 let lastScanSlot = "primary";
 let lastPredictedType = "";
+
+// gender cache
+let genderOptions = []; // [{Gender_id, gender_name}]
 
 // =====================
 // TEACHABLE MACHINE
@@ -204,6 +210,60 @@ async function scanFileToServer(file, { slot, predictedType } = {}) {
 }
 
 // =====================
+// GENDER DROPDOWN (tbl_gender)
+// =====================
+async function loadGenders() {
+  try {
+    const rows = await fetchJSON("/meta/genders", { method: "GET" });
+    genderOptions = Array.isArray(rows) ? rows : [];
+
+    // build options
+    genderSelect.innerHTML = "";
+    const opt0 = document.createElement("option");
+    opt0.value = "";
+    opt0.textContent = "Select Gender";
+    genderSelect.appendChild(opt0);
+
+    for (const r of genderOptions) {
+      const opt = document.createElement("option");
+      opt.value = String(r.Gender_id);
+      opt.textContent = r.gender_name;
+      genderSelect.appendChild(opt);
+    }
+  } catch (e) {
+    console.error("Failed to load genders:", e);
+    // fallback
+    genderSelect.innerHTML = `<option value="">Select Gender</option>`;
+  }
+}
+
+function setGenderByNameIfPossible(nameOrLetter) {
+  // tries to auto-select based on OCR "M/F" or "Male/Female"
+  const s = String(nameOrLetter || "").trim().toLowerCase();
+  if (!s) return;
+
+  let target = "";
+  if (s === "m" || s === "male") target = "male";
+  else if (s === "f" || s === "female") target = "female";
+  else return;
+
+  // find matching option by text
+  const opts = [...genderSelect.options];
+  const found = opts.find(o => (o.textContent || "").trim().toLowerCase() === target);
+  if (found) genderSelect.value = found.value;
+}
+
+// =====================
+// CONTACT INPUT RULE: 11 digits only
+// =====================
+function normalizeContactUI() {
+  const digits = (contactInput.value || "").replace(/\D/g, "").slice(0, 11);
+  contactInput.value = digits;
+}
+
+contactInput.addEventListener("input", normalizeContactUI);
+
+// =====================
 // MODES
 // =====================
 function setUploadMode(keepPreview = false) {
@@ -242,8 +302,13 @@ function applyRecordToUI(rec) {
   if (!middleNameInput.value) middleNameInput.value = guest.Middle_name || "";
   if (!lastNameInput.value) lastNameInput.value = guest.Last_name || "";
   if (!dobInput.value) dobInput.value = guest.Date_of_birth || "";
-  if (!genderInput.value) genderInput.value = guest.Gender || "";
+
+  // ✅ gender now select; try auto-select by OCR
+  if (!genderSelect.value) setGenderByNameIfPossible(guest.Gender || "");
+
   if (!contactInput.value) contactInput.value = guest.Contact || "";
+  normalizeContactUI(); // enforce digits-only
+
   if (!addressInput.value) addressInput.value = guest.Address || "";
 
   if (!idTypeInput.value) idTypeInput.value = guest.ID_type || "";
@@ -279,7 +344,7 @@ async function resetAll({ resetServer = false } = {}) {
 
   currentRefId = "";
 
-  // ✅ clear retry state
+  // clear retry state
   lastScanSource = null;
   lastScanFile = null;
   lastScanSlot = "primary";
@@ -300,7 +365,7 @@ async function resetAll({ resetServer = false } = {}) {
   middleNameInput.value = "";
   lastNameInput.value = "";
   dobInput.value = "";
-  genderInput.value = "";
+  genderSelect.value = "";
   contactInput.value = "";
   addressInput.value = "";
 
@@ -327,7 +392,7 @@ addSecondaryBtn.addEventListener("click", () => {
   inputFile.click();
 });
 
-// ✅ Retry (now actually retries upload OR camera)
+// Retry (retries upload OR camera)
 retryBtn.addEventListener("click", async () => {
   try {
     if (!lastScanFile) {
@@ -383,7 +448,7 @@ inputFile.addEventListener("change", async () => {
     applyRecordToUI(rec);
     setUploadMode(true);
 
-    // ✅ Save for retry
+    // Save for retry
     lastScanSource = "upload";
     lastScanFile = file;
     lastScanSlot = idSlotSelect.value;
@@ -393,7 +458,7 @@ inputFile.addEventListener("change", async () => {
     try { URL.revokeObjectURL(imgSrc); } catch {}
     alert("Error scanning upload: " + err.message);
 
-    // ✅ Still allow retry with same file
+    // Still allow retry with same file
     lastScanSource = "upload";
     lastScanFile = file;
     lastScanSlot = idSlotSelect.value;
@@ -414,7 +479,7 @@ snapBtn.addEventListener("click", async (e) => {
     return;
   }
 
-  // ✅ reduce size for speed
+  // reduce size for speed
   const targetW = 1280;
   const scale = targetW / camera.videoWidth;
   const w = targetW;
@@ -436,7 +501,7 @@ snapBtn.addEventListener("click", async (e) => {
 
     const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
 
-    // optional: predicted type via teachable machine
+    // predicted type via teachable machine
     let predictedType = "";
     try {
       const tmpUrl = URL.createObjectURL(blob);
@@ -460,7 +525,7 @@ snapBtn.addEventListener("click", async (e) => {
     applyRecordToUI(rec);
     setUploadMode(true);
 
-    // ✅ Save for retry (camera too)
+    // Save for retry (camera too)
     lastScanSource = "camera";
     lastScanFile = file;
     lastScanSlot = idSlotSelect.value;
@@ -479,6 +544,18 @@ recalcBtn.addEventListener("click", refreshAgePreview);
 exportBtn.addEventListener("click", async () => {
   refreshAgePreview();
 
+  // enforce contact rule before sending
+  normalizeContactUI();
+  if (contactInput.value && contactInput.value.length !== 11) {
+    alert("Contact must be exactly 11 digits.");
+    return;
+  }
+
+  if (!genderSelect.value) {
+    alert("Please select Gender.");
+    return;
+  }
+
   const payload = {
     reference_id: currentRefId || refIdInput.value,
     ID_type: idTypeInput.value.trim(),
@@ -487,40 +564,39 @@ exportBtn.addEventListener("click", async () => {
     Middle_name: middleNameInput.value.trim(),
     Last_name: lastNameInput.value.trim(),
     Date_of_birth: dobInput.value.trim(),
-    Gender: genderInput.value.trim(),
+
+    // ✅ send Gender_id (from tbl_gender)
+    Gender_id: Number(genderSelect.value),
+
+    // keep these for record/PDF display (backend can override gender name)
     Contact: contactInput.value.trim(),
     Address: addressInput.value.trim(),
   };
 
   try {
-
-    // ✅ 1 SAVE TO DATABASE
+    // 1) SAVE TO DATABASE
     const saveRes = await fetch("/save-guest", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
     const saveData = await saveRes.json();
-
     if (!saveRes.ok) {
       alert("Database save failed: " + (saveData.error || ""));
       return;
     }
 
-    // ✅ 2 GENERATE PDF
+    // 2) GENERATE PDF
     const pdfRes = await fetch("/export-pdf", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
     if (!pdfRes.ok) {
-      alert("Export failed");
+      const errText = await pdfRes.text().catch(() => "");
+      alert("Export failed. " + errText);
       return;
     }
 
@@ -537,7 +613,6 @@ exportBtn.addEventListener("click", async () => {
     URL.revokeObjectURL(url);
 
     alert("Guest saved to database successfully!");
-
   } catch (err) {
     alert("Error: " + err.message);
   }
@@ -548,7 +623,7 @@ newGuestBtn.addEventListener("click", async () => {
   await resetAll({ resetServer: true });
 });
 
-// ✅ Reset fields when user returns via browser back (BFCache)
+// Reset fields when user returns via browser back (BFCache)
 window.addEventListener("pageshow", async (e) => {
   if (e.persisted) {
     await resetAll({ resetServer: true });
@@ -561,7 +636,12 @@ exportBtn.disabled = true;
 addSecondaryBtn.style.display = "none";
 setRetryEnabled(false);
 
-// ✅ Safety: ensure buttons don’t submit forms
+// load gender dropdown at startup
+loadGenders().then(() => {
+  // nothing
+});
+
+// Safety: ensure buttons don’t submit forms
 try { retryBtn.type = "button"; } catch {}
 try { toggleBtn.type = "button"; } catch {}
 try { snapBtn.type = "button"; } catch {}
