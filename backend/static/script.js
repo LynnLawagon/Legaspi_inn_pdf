@@ -337,17 +337,28 @@ toggleBtn.addEventListener("click", async () => {
   else setUploadMode(false);
 });
 
-retryBtn.addEventListener("click", async () => {
+retryBtn.addEventListener("click", async (e) => {
+  e.preventDefault();      
+  e.stopPropagation();     
+
   try {
     if (!lastScanFile) {
       alert("Nothing to retry yet.");
       return;
     }
+
     showLoading("Retrying scan...");
+
+    if (lastScanFile.type && lastScanFile.type.startsWith("image/")) {
+      const url = URL.createObjectURL(lastScanFile);
+      setPreviewSrc(url, true);
+    }
+
     const rec = await scanFileToServer(lastScanFile, {
       slot: lastScanSlot,
       predictedType: lastPredictedType,
     });
+
     applyRecordToUI(rec, { forceAll: true });
     setUploadMode(true);
     setRetryEnabled(true);
