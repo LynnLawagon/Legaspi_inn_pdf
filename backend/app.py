@@ -1,4 +1,4 @@
-# app.py
+# app.py (FULL) - matches tbl_guests schema (Reference_code + Reference_id auto + valid DOB)
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory, abort
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
@@ -13,28 +13,17 @@ import numpy as np
 from datetime import datetime, date
 import easyocr
 
-
-# -----------------------
-# FLASK
-# -----------------------
-# NOTE: Your structure is backend/app.py, backend/templates, backend/static
 app = Flask(__name__, template_folder="templates")
 
-
 # -----------------------
-# COMPANY INFO
+# FOLDERS
 # -----------------------
-COMPANY_ADDRESS = "115 Pelayo St, Poblacion District, Davao City, 8000 Davao del Sur"
-COMPANY_NUMBER = "936 456 8920"
-LOGO_REL_PATH = "img/logo.png"  # backend/static/img/logo.png
-
 PDF_FOLDER = os.path.join(app.root_path, "static", "PDFs")
 UPLOAD_FOLDER = os.path.join(app.root_path, "static", "uploads")
 os.makedirs(PDF_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
-
 
 # -----------------------
 # OCR (cached)
@@ -46,10 +35,8 @@ def get_reader():
         reader = easyocr.Reader(["en", "tl"], gpu=False)
     return reader
 
-
-# in-memory records (per server run)
+# In-memory records keyed by Reference_code (string like "REF-20261234")
 RECORDS = {}
-
 
 # -----------------------
 # ROUTES (PAGES)
@@ -58,28 +45,32 @@ RECORDS = {}
 def home():
     return render_template("landing.html")
 
-
 @app.route("/scan-page")
 def scan_page():
     return render_template("index.html")
 
-
-# database connection test route
+# -----------------------
+# DB TEST
+# -----------------------
 @app.route("/test-db")
 def test_db():
     try:
         conn = get_conn()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM tbl_guests")
-        data = cursor.fetchall()
-        cursor.close()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT Reference_id, Reference_code, First_name, Last_name, Created_at
+            FROM tbl_guests
+            ORDER BY Reference_id DESC
+            LIMIT 10
+        """)
+        rows = cur.fetchall()
+        cur.close()
         conn.close()
-        return jsonify({"ok": True, "data": data})
+        return jsonify({"ok": True, "rows": rows})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-
-# ✅ genders list from tbl_gender (for dropdown)
+# genders list from tbl_gender
 @app.route("/meta/genders", methods=["GET"])
 def meta_genders():
     try:
@@ -94,7 +85,6 @@ def meta_genders():
         traceback.print_exc()
         return jsonify({"error": "Failed to load genders", "details": str(e)}), 500
 
-
 # -----------------------
 # HELPERS
 # -----------------------
@@ -103,23 +93,18 @@ def json_error(msg, code=400, **extra):
     payload.update(extra)
     return jsonify(payload), code
 
-
 def normalize_contact(contact: str) -> str:
     return re.sub(r"\D", "", contact or "")
-
 
 def is_valid_contact_11(contact: str) -> bool:
     return bool(re.fullmatch(r"\d{11}", contact or ""))
 
-
 def gender_exists(gender_id):
-    """Return {Gender_id, gender_name} if exists else None."""
     if gender_id is None:
         return None
     s = str(gender_id).strip()
     if not s:
         return None
-
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
     cur.execute("SELECT Gender_id, gender_name FROM tbl_gender WHERE Gender_id=%s LIMIT 1", (s,))
@@ -128,12 +113,25 @@ def gender_exists(gender_id):
     conn.close()
     return row
 
-
-def generate_reference_id():
-    return f"REF-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}"
-
+def normalize_dob(dob_str: str):
+    s = (dob_str or "").strip()
+    if not s:
+        return None
+    # YYYY-MM-DD
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return s
+    # DD/MM/YYYY or DD-MM-YYYY -> YYYY-MM-DD
+    m = re.fullmatch(r"(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})", s)
+    if m:
+        dd, mm, yyyy = m.groups()
+        try:
+            return datetime.strptime(f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}", "%Y-%m-%d").strftime("%Y-%m-%d")
+        except:
+            return None
+    return None
 
 def compute_age(dob_str: str):
+    dob_str = normalize_dob(dob_str)
     if not dob_str:
         return None
     try:
@@ -144,14 +142,12 @@ def compute_age(dob_str: str):
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     return age if 0 <= age <= 130 else None
 
-
 def safe_resize(img, target_w=900):
     h, w = img.shape[:2]
     if w <= target_w:
         return img
     scale = target_w / float(w)
     return cv2.resize(img, (target_w, int(h * scale)))
-
 
 def pdf_first_page_to_bgr(pdf_path):
     try:
@@ -171,52 +167,37 @@ def pdf_first_page_to_bgr(pdf_path):
     except Exception as e:
         return None, f"PDF render failed: {e}"
 
+def generate_ref_code():
+    # REF-YYYY + 4 digits
+    return f"REF-{datetime.now().year}{random.randint(1000,9999)}"
 
-PRIMARY_KEYWORDS = [
-    "PHILIPPINE IDENTIFICATION", "PHILIPPINE IDENTIFICATION CARD",
-    "PHILSYS", "NATIONAL ID",
-    "SCHOOL", "STUDENT", "COLLEGE", "UNIVERSITY",
-]
-SECONDARY_KEYWORDS = [
-    "BIRTH CERTIFICATE", "PSA",
-    "BARANGAY", "CLEARANCE",
-]
-
-
-def guess_id_category(full_text_upper: str) -> str:
-    t = (full_text_upper or "").upper()
-    if any(k in t for k in PRIMARY_KEYWORDS):
-        return "Primary"
-    if any(k in t for k in SECONDARY_KEYWORDS):
-        return "Secondary"
-    if "PAMBANSANG" in t or "PAGKAKAKILANLAN" in t:
-        return "Primary"
-    return "Unknown"
-
-
-def can_proceed(record: dict) -> bool:
-    cat = (record.get("ID_category") or "Unknown").strip()
-    if cat == "Primary":
-        return True
-    if cat == "Secondary":
-        return len(record.get("Secondary_ids", [])) >= 2
-    return False
-
+def ensure_unique_ref_code():
+    # ensure unique vs DB unique constraint
+    for _ in range(20):
+        code = generate_ref_code()
+        conn = get_conn()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT 1 FROM tbl_guests WHERE Reference_code=%s LIMIT 1", (code,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return code
+    # fallback if unlucky
+    return f"REF-{datetime.now().year}{random.randint(100000,999999)}"
 
 # -----------------------
 # OCR + PARSING
 # -----------------------
 STOPWORDS = {
-    "REPUBLIC", "PHILIPPINES", "PHILIPPINE", "IDENTIFICATION", "CARD", "NATIONAL", "ID",
-    "PHILSYS", "DOB", "BIRTH", "DATE", "SEX", "GENDER", "ADDRESS", "TIRAHAN",
-    "SIGNATURE", "ISSUED", "VALID", "BARANGAY", "CLEARANCE", "CERTIFICATE", "PSA",
-    "PAMBANSANG", "PAGKAKAKILANLAN", "PILIPINAS",
-    "APELYIDO", "GIVEN", "MIDDLE", "NAME", "PANGALAN", "KAPANGANAKAN", "KASARIAN",
-    "SENIOR", "HIGH", "SCHOOL", "STUDENT", "SIGN", "NO", "NUMBER",
-    "COLLEGE", "UNIVERSITY", "CAMPUS", "DEPARTMENT", "CITY", "PROVINCE",
-    "VALIDITY", "TERM", "SY", "GRADE", "SECTION", "LRN",
+    "REPUBLIC","PHILIPPINES","PHILIPPINE","IDENTIFICATION","CARD","NATIONAL","ID",
+    "PHILSYS","DOB","BIRTH","DATE","SEX","GENDER","ADDRESS","TIRAHAN",
+    "SIGNATURE","ISSUED","VALID","BARANGAY","CLEARANCE","CERTIFICATE","PSA",
+    "PAMBANSANG","PAGKAKAKILANLAN","PILIPINAS",
+    "APELYIDO","GIVEN","MIDDLE","NAME","PANGALAN","KAPANGANAKAN","KASARIAN",
+    "SENIOR","HIGH","SCHOOL","STUDENT","SIGN","NO","NUMBER",
+    "COLLEGE","UNIVERSITY","CAMPUS","DEPARTMENT","CITY","PROVINCE",
 }
-
 
 def preprocess(img_bgr):
     img_bgr = safe_resize(img_bgr, target_w=900)
@@ -229,7 +210,6 @@ def preprocess(img_bgr):
         31, 9
     )
     return gray, thr
-
 
 def ocr_items(img):
     r = get_reader()
@@ -244,8 +224,7 @@ def ocr_items(img):
         mag_ratio=1.2
     )
 
-    items = []
-    full = []
+    items, full = [], []
     for (bbox, text, conf) in res:
         if not text:
             continue
@@ -256,18 +235,11 @@ def ocr_items(img):
 
         xs = [p[0] for p in bbox]
         ys = [p[1] for p in bbox]
-        cx = float(sum(xs)) / 4.0
         cy = float(sum(ys)) / 4.0
-        y1, y2 = float(min(ys)), float(max(ys))
-        items.append({
-            "text": up,
-            "conf": float(conf) if conf is not None else 0.0,
-            "cx": cx, "cy": cy, "y1": y1, "y2": y2
-        })
+        items.append({"text": up, "conf": float(conf) if conf is not None else 0.0, "cy": cy})
 
     items.sort(key=lambda x: x["cy"])
     return items, " ".join(full)
-
 
 def clean_name(s: str) -> str:
     s = (s or "").upper()
@@ -283,27 +255,21 @@ def clean_name(s: str) -> str:
         toks.append(t2)
     return " ".join(toks).strip()
 
-
 def looks_like_name(s: str) -> bool:
     if not s:
         return False
     toks = s.split()
     if not (1 <= len(toks) <= 6):
         return False
-    if any(len(t) < 2 for t in toks if t != "-"):
-        return False
-    bad = {"REPUBLIC", "PHILIPPINES", "PAMBANSANG", "PAGKAKAKILANLAN",
-           "PHILIPPINE", "IDENTIFICATION", "CARD", "STUDENT", "SCHOOL"}
+    bad = {"REPUBLIC","PHILIPPINES","PAMBANSANG","PAGKAKAKILANLAN","PHILIPPINE","IDENTIFICATION","CARD","STUDENT","SCHOOL"}
     if any(b in toks for b in bad):
         return False
     return True
-
 
 def get_value_near_label(items, label_variants, max_lines_ahead=8):
     texts = [x["text"] for x in items]
     for i, t in enumerate(texts):
         tt = (t or "").upper()
-
         hit = None
         for v in label_variants:
             if v in tt:
@@ -323,29 +289,10 @@ def get_value_near_label(items, label_variants, max_lines_ahead=8):
                 return cand
     return ""
 
-
-def extract_school_fullname(items):
-    cands = []
-    for it in items:
-        if it["conf"] < 0.45:
-            continue
-        s = clean_name(it["text"])
-        toks = s.split()
-        if not (2 <= len(toks) <= 6):
-            continue
-        bad = {"SCHOOL", "STUDENT", "SIGNATURE", "SENIOR", "HIGH", "COLLEGE",
-               "UNIVERSITY", "ID", "NO", "VALID", "TERM", "SY"}
-        if any(b in toks for b in bad):
-            continue
-        cands.append((it["cy"], s))
-    cands.sort(key=lambda x: x[0], reverse=True)
-    return cands[0][1] if cands else ""
-
-
-def extract_names(items, full_text):
+def extract_names(items):
     last = get_value_near_label(items, ["APELYIDO", "LAST NAME", "SURNAME"])
-    first = get_value_near_label(items, ["MGA PANGALAN", "GIVEN NAMES", "GIVEN NAME", "FIRST NAME"])
-    middle = get_value_near_label(items, ["GITNANG APELYIDO", "MIDDLE NAME"])
+    first = get_value_near_label(items, ["GIVEN NAMES", "GIVEN NAME", "FIRST NAME", "MGA PANGALAN"])
+    middle = get_value_near_label(items, ["MIDDLE NAME", "GITNANG APELYIDO"])
 
     if not (first and last):
         full = get_value_near_label(items, ["FULL NAME", "STUDENT NAME", "NAME"], max_lines_ahead=6)
@@ -357,113 +304,69 @@ def extract_names(items, full_text):
                 if len(toks) > 2:
                     middle = middle or " ".join(toks[1:-1])
 
-    if not (first and last):
-        full2 = extract_school_fullname(items)
-        if full2:
-            toks = clean_name(full2).split()
-            if len(toks) >= 2:
-                first = first or toks[0]
-                last = last or toks[-1]
-                if len(toks) > 2:
-                    middle = middle or " ".join(toks[1:-1])
-
     return first, middle, last
-
 
 def extract_id_number(full_text_upper: str):
     t = full_text_upper or ""
     m = re.search(r"\b\d{4}-\d{4}-\d{4}-\d{4}\b", t)
-    if m:
-        return m.group(0)
+    if m: return m.group(0)
     m2 = re.search(r"\b\d{16}\b", t)
-    if m2:
-        return m2.group(0)
+    if m2: return m2.group(0)
     m3 = re.search(r"\b\d{3,}-\d{3,}-\d{3,}\b", t)
-    if m3:
-        return m3.group(0)
+    if m3: return m3.group(0)
     return ""
-
 
 def extract_dob(full_text):
     full_text = (full_text or "").upper()
 
-    m1 = re.search(
-        r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2}\s+\d{4}",
-        full_text
-    )
-    if m1:
-        try:
-            return datetime.strptime(m1.group(0), "%B %d %Y").strftime("%Y-%m-%d")
-        except Exception:
-            pass
+    # YYYY-MM-DD
+    m0 = re.search(r"\b\d{4}-\d{2}-\d{2}\b", full_text)
+    if m0:
+        return m0.group(0)
 
+    # DD/MM/YYYY or DD-MM-YYYY
     m2 = re.search(r"\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\b", full_text)
     if m2:
-        mm, dd, yyyy = m2.groups()
-        try:
-            return datetime.strptime(f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}", "%Y-%m-%d").strftime("%Y-%m-%d")
-        except Exception:
-            pass
+        dd, mm, yyyy = m2.groups()
+        return normalize_dob(f"{dd}/{mm}/{yyyy}") or ""
 
-    m3 = re.search(
-        r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2},\s+\d{4}",
-        full_text
-    )
+    # MONTH DD, YYYY
+    m3 = re.search(r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2},\s+\d{4}", full_text)
     if m3:
         try:
             return datetime.strptime(m3.group(0), "%B %d, %Y").strftime("%Y-%m-%d")
-        except Exception:
+        except:
+            pass
+
+    # MONTH DD YYYY
+    m1 = re.search(r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2}\s+\d{4}", full_text)
+    if m1:
+        try:
+            return datetime.strptime(m1.group(0), "%B %d %Y").strftime("%Y-%m-%d")
+        except:
             pass
 
     return ""
-
 
 def extract_address(full_text):
     t = (full_text or "").upper()
     m = re.search(r"(TIRAHAN|ADDRESS)\s*[:\-]?\s*(.+)", t)
-    if m:
-        return m.group(2).strip()
+    if m: return m.group(2).strip()
     m2 = re.search(r"\bBARANGAY\b\s+(.+)", t)
-    if m2:
-        return m2.group(0).strip()
+    if m2: return m2.group(0).strip()
     return ""
-
 
 def extract_gender(full_text):
     t = (full_text or "").upper()
     m = re.search(r"\b(SEX|GENDER)\b\s*[:\-]?\s*([A-Z])\b", t)
     return m.group(2) if m else ""
 
-
-def crop_roi(img, x1, y1, x2, y2):
-    h, w = img.shape[:2]
-    x1 = max(0, int(x1 * w)); x2 = min(w, int(x2 * w))
-    y1 = max(0, int(y1 * h)); y2 = min(h, int(y2 * h))
-    if x2 <= x1 or y2 <= y1:
-        return None
-    return img[y1:y2, x1:x2]
-
-
 def parse_fields_from_image(img_bgr):
     gray, _thr = preprocess(img_bgr)
+    items, full = ocr_items(gray)
+    full_text = (full or "").upper()
 
-    roi_idno   = crop_roi(gray, 0.02, 0.18, 0.55, 0.33)
-    roi_names  = crop_roi(gray, 0.52, 0.30, 0.98, 0.78)
-    roi_addr   = crop_roi(gray, 0.02, 0.76, 0.75, 0.98)
-    roi_school = crop_roi(gray, 0.05, 0.55, 0.95, 0.90)
-
-    items_all = []
-    full_parts = []
-    for roi in [roi_idno, roi_names, roi_addr, roi_school]:
-        if roi is None:
-            continue
-        items, full = ocr_items(roi)
-        items_all.extend(items)
-        full_parts.append(full)
-
-    full_text = " ".join(full_parts).upper()
-
-    first, middle, last = extract_names(items_all, full_text)
+    first, middle, last = extract_names(items)
     dob = extract_dob(full_text)
     id_no = extract_id_number(full_text)
     address = extract_address(full_text)
@@ -481,7 +384,6 @@ def parse_fields_from_image(img_bgr):
         "__full_text": full_text,
     }, None
 
-
 # -----------------------
 # ERROR HANDLER
 # -----------------------
@@ -494,19 +396,15 @@ def handle_exception(e):
         return json_error("Server error", 500, details=str(e))
     raise e
 
-
 # -----------------------
-# RECORD MANAGEMENT
+# RECORD HELPERS
 # -----------------------
-def ensure_record(ref: str):
-    if ref not in RECORDS:
-        RECORDS[ref] = {
-            "Reference_id": ref,
-            "Created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "ID_category": "Unknown",
-            "Primary_id": None,
-            "Secondary_ids": [],
+def ensure_record(ref_code: str):
+    if ref_code not in RECORDS:
+        RECORDS[ref_code] = {
+            "Reference_code": ref_code,
             "Guest": {
+                "ID_num": None,
                 "ID_type": "",
                 "ID_no": "",
                 "First_name": "",
@@ -518,46 +416,11 @@ def ensure_record(ref: str):
                 "Contact": "",
                 "Address": "",
             },
-            "Secondary_count": 0,
-            "Can_proceed": False
+            "Img_path": "",
+            "Can_proceed": True,
+            "ID_category": "PRIMARY",
         }
-    return RECORDS[ref]
-
-
-def merge_extracted_into_record(extracted: dict, ref: str, slot: str, predicted_id_type: str = ""):
-    record = ensure_record(ref)
-
-    guessed_category = guess_id_category(extracted.get("__full_text", ""))
-
-    if slot == "primary":
-        record["ID_category"] = "Primary"
-    else:
-        record["ID_category"] = "Secondary" if guessed_category != "Primary" else "Primary"
-
-    g = record["Guest"]
-
-    for key in ["First_name", "Middle_name", "Last_name", "Date_of_birth", "Gender", "Address", "ID_no"]:
-        v = (extracted.get(key) or "").strip()
-        if v:
-            g[key] = v
-
-    if predicted_id_type:
-        g["ID_type"] = predicted_id_type
-
-    g["Age"] = compute_age(g.get("Date_of_birth") or "")
-    record["Guest"] = g
-
-    img_path = extracted.get("Img_path", "")
-    if slot == "primary":
-        record["Primary_id"] = {"Img_path": img_path, "Uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    else:
-        if img_path and not any(x.get("Img_path") == img_path for x in record["Secondary_ids"]):
-            record["Secondary_ids"].append({"Img_path": img_path, "Uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-
-    record["Secondary_count"] = len(record["Secondary_ids"])
-    record["Can_proceed"] = can_proceed(record)
-    return record
-
+    return RECORDS[ref_code]
 
 def apply_manual_overrides(record: dict, payload: dict):
     g = record.get("Guest", {})
@@ -566,18 +429,25 @@ def apply_manual_overrides(record: dict, payload: dict):
         v = payload.get(key)
         return None if v is None else str(v).strip()
 
-    for k in ["ID_type", "ID_no", "First_name", "Middle_name", "Last_name",
-              "Date_of_birth", "Gender", "Contact", "Address"]:
+    # allow optional ID_num
+    id_num = payload.get("ID_num")
+    if id_num is not None and str(id_num).strip() != "":
+        try:
+            g["ID_num"] = int(id_num)
+        except:
+            g["ID_num"] = None
+
+    for k in ["ID_type","ID_no","First_name","Middle_name","Last_name","Date_of_birth","Gender","Contact","Address"]:
         v = pick(k)
         if v is not None:
             if k == "Contact":
                 v = normalize_contact(v)
+            if k == "Date_of_birth":
+                v = normalize_dob(v) or ""
             g[k] = v
 
     g["Age"] = compute_age(g.get("Date_of_birth") or "")
     record["Guest"] = g
-    record["Can_proceed"] = can_proceed(record)
-
 
 # -----------------------
 # RESET
@@ -588,12 +458,11 @@ def reset_record():
     ref = data.get("reference_id") or data.get("Reference_id")
     if not ref:
         return json_error("Missing reference_id", 400)
-    RECORDS.pop(ref, None)
+    RECORDS.pop(str(ref), None)
     return jsonify({"ok": True}), 200
 
-
 # -----------------------
-# UPLOAD
+# UPLOAD / OCR
 # -----------------------
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -605,8 +474,10 @@ def upload():
         if not file or file.filename == "":
             return json_error("No file selected", 400)
 
-        ref = request.form.get("reference_id") or generate_reference_id()
-        slot = request.form.get("slot", "secondary")
+        ref_code = request.form.get("reference_id") or request.form.get("Reference_id")
+        if not ref_code:
+            ref_code = ensure_unique_ref_code()
+
         predicted_id_type = request.form.get("predicted_id_type", "")
 
         filename = secure_filename(file.filename or "upload.jpg")
@@ -616,16 +487,10 @@ def upload():
             mt = (file.mimetype or "").lower()
             if "jpeg" in mt or "jpg" in mt:
                 ext = ".jpg"
-                if not filename.lower().endswith(".jpg"):
-                    filename += ".jpg"
             elif "png" in mt:
                 ext = ".png"
-                if not filename.lower().endswith(".png"):
-                    filename += ".png"
             elif "pdf" in mt:
                 ext = ".pdf"
-                if not filename.lower().endswith(".pdf"):
-                    filename += ".pdf"
 
         if ext not in ALLOWED_EXT:
             return json_error("Invalid file type. Use JPG/PNG/WEBP or PDF.", 400)
@@ -634,63 +499,102 @@ def upload():
         if not data:
             return json_error("Empty file", 400)
 
-        if ext == ".pdf":
-            unique = f"upload_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}_{filename}"
-            saved_path = os.path.join(UPLOAD_FOLDER, unique)
-            with open(saved_path, "wb") as f:
-                f.write(data)
+        unique = f"{ref_code}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}{ext}"
+        saved_path = os.path.join(UPLOAD_FOLDER, unique)
 
+        with open(saved_path, "wb") as f:
+            f.write(data)
+
+        if ext == ".pdf":
             img, err = pdf_first_page_to_bgr(saved_path)
             if err:
                 return json_error("PDF error", 500, details=err)
             if img is None:
                 return json_error("Could not read PDF", 400)
-
-            img_path_db = f"uploads/{unique}"
         else:
             nparr = np.frombuffer(data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if img is None:
                 return json_error("Could not read the uploaded image", 400)
 
-            unique = f"upload_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}_{filename}"
-            saved_path = os.path.join(UPLOAD_FOLDER, unique)
-            with open(saved_path, "wb") as f:
-                f.write(data)
-
-            img_path_db = f"uploads/{unique}"
-
         extracted, err = parse_fields_from_image(img)
         if err:
             return json_error(err, 400)
 
-        extracted["Img_path"] = img_path_db
-        record = merge_extracted_into_record(extracted, ref=ref, slot=slot, predicted_id_type=predicted_id_type)
-        return jsonify(record), 200
+        record = ensure_record(ref_code)
+        g = record["Guest"]
+
+        for key in ["First_name","Middle_name","Last_name","Date_of_birth","Gender","Address","ID_no"]:
+            v = (extracted.get(key) or "").strip()
+            if v:
+                if key == "Date_of_birth":
+                    v = normalize_dob(v) or v
+                g[key] = v
+
+        if predicted_id_type:
+            g["ID_type"] = predicted_id_type
+
+        g["Age"] = compute_age(g.get("Date_of_birth") or "")
+        record["Guest"] = g
+
+        # Img_path is NOT NULL in DB, so always set it in record
+        record["Img_path"] = f"uploads/{unique}"
+        record["Can_proceed"] = True
+        record["ID_category"] = "PRIMARY"
+
+        # Response structure expected by JS
+        return jsonify({
+            "Reference_id": ref_code,   # for UI display
+            "Reference_code": ref_code,
+            "Guest": record["Guest"],
+            "Img_path": record["Img_path"],
+            "Can_proceed": True,
+            "ID_category": "PRIMARY"
+        }), 200
 
     except Exception as e:
         traceback.print_exc()
         return json_error("Server error while scanning", 500, details=str(e))
 
-
 # -----------------------
-# SAVE GUEST (DB)
+# SAVE GUEST (DB) - inserts all required columns
 # -----------------------
 @app.route("/save-guest", methods=["POST"])
 def save_guest():
     try:
         payload = request.get_json(silent=True) or {}
-
-        ref = payload.get("reference_id") or payload.get("Reference_id")
-        if not ref:
+        ref_code = payload.get("reference_id") or payload.get("Reference_code") or payload.get("Reference_id")
+        if not ref_code:
             return json_error("Missing reference_id", 400)
 
-        record = RECORDS.get(ref)
+        record = RECORDS.get(str(ref_code))
         if not record:
             return json_error("No record found for that Reference ID.", 404)
 
         apply_manual_overrides(record, payload)
         guest = record.get("Guest") or {}
+
+        # validate required NOT NULL columns
+        if not guest.get("ID_type"):
+            return json_error("ID Type is required.", 400)
+        if not guest.get("First_name"):
+            return json_error("First Name is required.", 400)
+        if not guest.get("Last_name"):
+            return json_error("Last Name is required.", 400)
+
+        dob_norm = normalize_dob(guest.get("Date_of_birth") or "")
+        if not dob_norm:
+            return json_error("Date of birth must be valid (YYYY-MM-DD).", 400)
+        guest["Date_of_birth"] = dob_norm
+        guest["Age"] = compute_age(dob_norm)
+
+        addr = (guest.get("Address") or "").strip()
+        if not addr:
+            return json_error("Address is required.", 400)
+
+        img_rel = (record.get("Img_path") or "").strip()
+        if not img_rel:
+            return json_error("Image path missing. Please rescan.", 400)
 
         contact = normalize_contact(guest.get("Contact", ""))
         if contact and not is_valid_contact_11(contact):
@@ -702,203 +606,267 @@ def save_guest():
         if not row:
             return json_error("Please select Gender from the list.", 400)
 
-        guest["Gender"] = row["gender_name"]
-        record["Guest"] = guest
-
-        img_rel = ""
-        if record.get("Primary_id") and record["Primary_id"].get("Img_path"):
-            img_rel = record["Primary_id"]["Img_path"]
-        elif record.get("Secondary_ids"):
-            img_rel = (record["Secondary_ids"][0] or {}).get("Img_path", "")
-
         conn = get_conn()
         cur = conn.cursor()
 
         sql = """
         INSERT INTO tbl_guests
-        (Reference_id, ID_type, ID_no, First_name, Middle_name, Last_name,
-         Date_of_birth, Gender_id, Contact, Address, Img_path,
-         ID_category, Secondary_count, Can_proceed)
+        (ID_num, Reference_code, ID_type, ID_no, First_name, Middle_name, Last_name,
+         Date_of_birth, Age, Can_proceed, Gender_id, Contact, Address, Img_path)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """
 
         cur.execute(sql, (
-            ref,
+            guest.get("ID_num"),
+            str(ref_code),
             guest.get("ID_type",""),
-            guest.get("ID_no",""),
+            guest.get("ID_no") or None,
             guest.get("First_name",""),
-            guest.get("Middle_name",""),
+            guest.get("Middle_name") or None,
             guest.get("Last_name",""),
-            guest.get("Date_of_birth") or None,
+            guest.get("Date_of_birth"),
+            guest.get("Age"),
+            1,
             int(row["Gender_id"]),
-            guest.get("Contact",""),
-            guest.get("Address",""),
-            img_rel or "",
-            record.get("ID_category",""),
-            int(record.get("Secondary_count", 0) or 0),
-            1 if record.get("Can_proceed") else 0
+            guest.get("Contact") or None,
+            addr,
+            img_rel
         ))
 
-        new_id = cur.lastrowid
+        new_auto_ref_id = cur.lastrowid  # this is Reference_id auto_increment
         conn.commit()
         cur.close()
         conn.close()
 
-        return jsonify({"ok": True, "saved_id": new_id, "reference_id": ref}), 200
+        return jsonify({"ok": True, "reference_code": str(ref_code), "reference_id": int(new_auto_ref_id)}), 200
 
     except Exception as e:
         traceback.print_exc()
         return json_error("DB save failed", 500, details=str(e))
 
-
 # -----------------------
-# PDF EXPORT
+# PDF EXPORT (uses Reference_code string)
 # -----------------------
-def wrap_text_by_width(c, text, max_width, font_name="Helvetica", font_size=11):
-    text = (text or "").replace("\n", " ").strip()
-    if not text:
-        return [""]
-    c.setFont(font_name, font_size)
-    words = text.split()
-    lines, cur = [], ""
-    for w in words:
-        test = (cur + " " + w).strip()
-        if c.stringWidth(test, font_name, font_size) <= max_width:
-            cur = test
-        else:
-            if cur:
-                lines.append(cur)
-                cur = w
-            else:
-                lines.append(w)
-                cur = ""
-    if cur:
-        lines.append(cur)
-    return lines
-
-
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
     try:
         payload = request.get_json(silent=True) or {}
-        ref = payload.get("Reference_id") or payload.get("reference_id")
-        if not ref:
-            return json_error("Missing Reference_id", 400)
+        ref_code = payload.get("reference_id") or payload.get("Reference_code") or payload.get("Reference_id")
+        if not ref_code:
+            return json_error("Missing reference_id", 400)
 
-        record = RECORDS.get(ref)
+        record = RECORDS.get(str(ref_code))
         if not record:
             return json_error("No record found for that Reference ID.", 404)
 
         apply_manual_overrides(record, payload)
-
-        cat = (record.get("ID_category") or "Unknown").strip()
-        if cat == "Unknown":
-            return json_error("Cannot export: ID Category is Unknown.", 400)
-
-        if not record.get("Can_proceed"):
-            if cat == "Secondary":
-                return json_error("Cannot export: Need 2 Secondary IDs to proceed.", 400)
-            return json_error("Cannot export: Not allowed to proceed.", 400)
-
         guest = record.get("Guest") or {}
-        sec_ids = record.get("Secondary_ids") or []
 
-        filename = f"{ref}.pdf"
+        # Normalize DOB and Age for display
+        guest["Date_of_birth"] = normalize_dob(guest.get("Date_of_birth") or "") or (guest.get("Date_of_birth") or "")
+        guest["Age"] = compute_age(guest.get("Date_of_birth") or "")
+
+        filename = f"{ref_code}.pdf"
         pdf_path = os.path.join(PDF_FOLDER, filename)
 
         c = canvas.Canvas(pdf_path, pagesize=A4)
         w, h = A4
         margin = 45
 
+        # =========================
+        # HEADER (like screenshot)
+        # =========================
         header_top = h - margin
-        logo_abs = os.path.join(app.root_path, "static", LOGO_REL_PATH)
+        header_bottom = h - 120
 
-        logo_w, logo_h = 210, 50
-        logo_y = header_top - logo_h
-        if os.path.exists(logo_abs):
+        # Optional logo (put logo here: static/img/logo.png)
+        logo_path = os.path.join(app.root_path, "static", "img", "logo.png")
+        logo_x = margin
+        logo_y = header_top - 35
+
+        if os.path.exists(logo_path):
             try:
-                c.drawImage(ImageReader(logo_abs), margin, logo_y, width=logo_w, height=logo_h,
-                            preserveAspectRatio=True, mask="auto")
-            except Exception:
+                c.drawImage(ImageReader(logo_path), logo_x, logo_y, width=90, height=30, mask="auto")
+            except:
                 pass
 
-        right_x = w - margin
-        c.setFont("Helvetica", 10)
-        c.drawRightString(right_x, header_top - 10, COMPANY_ADDRESS)
-        c.drawRightString(right_x, header_top - 24, COMPANY_NUMBER)
-        c.setFont("Helvetica-Bold", 10)
-        c.drawRightString(right_x, header_top - 40, f"{ref}")
+        # Hotel contact (top right)
         c.setFont("Helvetica", 9)
-        c.drawRightString(right_x, header_top - 54, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        right_x = w - margin
+        c.drawRightString(right_x, header_top - 10, "115 Pelayo St, Poblacion District, Davao City, 8000 Davao del Sur")
+        c.drawRightString(right_x, header_top - 25, "096 456 8920")
 
-        c.setLineWidth(1)
-        header_line_y = header_top - 70
-        c.line(margin, header_line_y, w - margin, header_line_y)
+        # Ref + datetime under it (right side)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawRightString(right_x, header_top - 45, f"{ref_code}")
+        c.setFont("Helvetica", 8)
+        c.drawRightString(right_x, header_top - 58, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-        body_top = header_top - 105
+        # divider line
+        c.setLineWidth(0.7)
+        c.line(margin, header_bottom, w - margin, header_bottom)
 
-        photo_w, photo_h = 240, 140
+        # =========================
+        # BODY LAYOUT
+        # Left: Details
+        # Right: Photo
+        # =========================
+        body_top = header_bottom - 25
+
+        # "GUEST DETAILS" heading (left)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, body_top, "GUEST DETAILS")
+
+        # photo box on the RIGHT
+        photo_w, photo_h = 190, 115
         photo_x = w - margin - photo_w
-        photo_y = (header_line_y - 10) - photo_h
-
-        gutter = 18
-        left_col_x = margin
-        left_col_right = photo_x - gutter
-
-        details_label_x = left_col_x
-        details_value_x = left_col_x + 150
-        value_max_w = max(50, left_col_right - details_value_x)
-
-        c.setFont("Helvetica-Bold", 18)
-        c.drawString(left_col_x, body_top, "GUEST DETAILS")
-
-        y = body_top - 30
-
-        def kv(label, value, max_lines=2):
-            nonlocal y
-            value = value if value else "N/A"
-            c.setFont("Helvetica-Bold", 11)
-            c.drawString(details_label_x, y, f"{label}:")
-            lines = wrap_text_by_width(c, value, value_max_w, "Helvetica", 11)[:max_lines]
-            c.setFont("Helvetica", 11)
-            vy = y
-            for ln in lines:
-                c.drawString(details_value_x, vy, ln)
-                vy -= 14
-            used = max(1, len(lines))
-            y -= (18 + (used - 1) * 14)
-
-        kv("ID Category", record.get("ID_category", "Unknown"), 1)
-        kv("ID Type", guest.get("ID_type", ""), 2)
-        kv("ID Number", guest.get("ID_no", ""), 2)
-        kv("First name", guest.get("First_name", ""), 2)
-        kv("Middle name", guest.get("Middle_name", ""), 2)
-        kv("Last name", guest.get("Last_name", ""), 2)
-        kv("Birthdate", guest.get("Date_of_birth", ""), 1)
-        kv("Age", str(guest.get("Age")) if guest.get("Age") is not None else "", 1)
-        kv("Gender", guest.get("Gender", ""), 1)
-        kv("Contact", guest.get("Contact", ""), 2)
-
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(details_label_x, y, "Address:")
-        addr_lines = wrap_text_by_width(c, guest.get("Address", "") or "N/A", value_max_w, "Helvetica", 11)
-        c.setFont("Helvetica", 11)
-        for ln in addr_lines[:3]:
-            c.drawString(details_value_x, y, ln)
-            y -= 14
-        y -= 10
-
+        photo_y = body_top - 10 - photo_h  # aligned near title
         c.rect(photo_x, photo_y, photo_w, photo_h)
 
-        img_rel = ""
-        if record.get("Primary_id") and record["Primary_id"].get("Img_path"):
-            img_rel = record["Primary_id"]["Img_path"]
-        elif sec_ids:
-            img_rel = sec_ids[0].get("Img_path", "")
-
-        img_rel = (img_rel or "").replace("\\", "/")
+        # draw image inside box
+        img_rel = (record.get("Img_path") or "").replace("\\", "/")
         img_abs = os.path.join(app.root_path, "static", img_rel)
+        if img_rel and os.path.exists(img_abs):
+            try:
+                c.drawImage(
+                    ImageReader(img_abs),
+                    photo_x + 3, photo_y + 3,
+                    width=photo_w - 6, height=photo_h - 6,
+                    preserveAspectRatio=True, anchor="c"
+                )
+            except:
+                pass
 
+        # Guest fields (left) — keep space so it won't hit the photo
+        left_block_right_limit = photo_x - 20
+        label_x = margin
+        value_x = margin + 115
+        y = body_top - 35
+        gap = 16
+
+        def draw_row(label, value):
+            nonlocal y
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(label_x, y, f"{label}:")
+            c.setFont("Helvetica", 10)
+
+            txt = (value or "").strip()
+            if not txt:
+                txt = "N/A"
+
+            # simple clipping if too long (avoid overlap)
+            max_chars = 55
+            if len(txt) > max_chars:
+                txt = txt[:max_chars - 3] + "..."
+
+            c.drawString(value_x, y, txt)
+            y -= gap
+
+        # optional id_category (if you want it visible)
+        draw_row("ID Category", (record.get("ID_category") or "Primary").title())
+        draw_row("ID Type", guest.get("ID_type", ""))
+        draw_row("ID Number", guest.get("ID_no", ""))
+
+        draw_row("First name", guest.get("First_name", ""))
+        draw_row("Middle name", guest.get("Middle_name", ""))
+        draw_row("Last name", guest.get("Last_name", ""))
+
+        draw_row("Birthdate", guest.get("Date_of_birth", ""))
+        draw_row("Age", str(guest.get("Age")) if guest.get("Age") is not None else "")
+        draw_row("Gender", payload.get("gender_name", ""))  # optional display label
+        draw_row("Contact", guest.get("Contact", ""))
+
+        # Address can be long: wrap to multiple lines
+        addr = guest.get("Address", "") or "N/A"
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(label_x, y, "Address:")
+        c.setFont("Helvetica", 10)
+
+        # wrap address within left area width
+        max_width = left_block_right_limit - value_x
+        words = addr.split()
+        line = ""
+        y_addr = y
+        for wword in words:
+            test = (line + " " + wword).strip()
+            if c.stringWidth(test, "Helvetica", 10) <= max_width:
+                line = test
+            else:
+                c.drawString(value_x, y_addr, line)
+                y_addr -= gap
+                line = wword
+        if line:
+            c.drawString(value_x, y_addr, line)
+            y_addr -= gap
+
+        # Footer
+        c.setFont("Helvetica-Oblique", 8)
+        c.drawString(margin, 25, "Generated by AIntelli OCR Guest System")
+        c.drawRightString(w - margin, 25, "Page 1")
+
+        c.save()
+        return send_file(pdf_path, as_attachment=True)
+
+    except Exception as e:
+        traceback.print_exc()
+        return json_error("PDF export failed", 500, details=str(e))
+    try:
+        payload = request.get_json(silent=True) or {}
+        ref_code = payload.get("reference_id") or payload.get("Reference_code") or payload.get("Reference_id")
+        if not ref_code:
+            return json_error("Missing reference_id", 400)
+
+        record = RECORDS.get(str(ref_code))
+        if not record:
+            return json_error("No record found for that Reference ID.", 404)
+
+        apply_manual_overrides(record, payload)
+        guest = record.get("Guest") or {}
+
+        # normalize required fields for display
+        guest["Date_of_birth"] = normalize_dob(guest.get("Date_of_birth") or "") or (guest.get("Date_of_birth") or "")
+        guest["Age"] = compute_age(guest.get("Date_of_birth") or "")
+
+        filename = f"{ref_code}.pdf"
+        pdf_path = os.path.join(PDF_FOLDER, filename)
+
+        c = canvas.Canvas(pdf_path, pagesize=A4)
+        w, h = A4
+        margin = 45
+
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(margin, h - margin, "GUEST DETAILS")
+        c.setFont("Helvetica-Bold", 11)
+        c.drawRightString(w - margin, h - margin, str(ref_code))
+
+        y = h - margin - 40
+
+        def line(label, value):
+            nonlocal y
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(margin, y, f"{label}:")
+            c.setFont("Helvetica", 11)
+            c.drawString(margin + 140, y, value if value else "N/A")
+            y -= 18
+
+        line("ID Type", guest.get("ID_type",""))
+        line("ID Number", guest.get("ID_no",""))
+        line("First Name", guest.get("First_name",""))
+        line("Middle Name", guest.get("Middle_name",""))
+        line("Last Name", guest.get("Last_name",""))
+        line("Birthdate", guest.get("Date_of_birth",""))
+        line("Age", str(guest.get("Age")) if guest.get("Age") is not None else "")
+        line("Contact", guest.get("Contact",""))
+        line("Address", guest.get("Address",""))
+
+        # photo box
+        photo_w, photo_h = 260, 150
+        photo_x = w - margin - photo_w
+        photo_y = margin + 60
+        c.rect(photo_x, photo_y, photo_w, photo_h)
+
+        img_rel = (record.get("Img_path") or "").replace("\\", "/")
+        img_abs = os.path.join(app.root_path, "static", img_rel)
         if img_rel and os.path.exists(img_abs):
             try:
                 c.drawImage(ImageReader(img_abs),
@@ -910,7 +878,7 @@ def export_pdf():
 
         c.setFont("Helvetica-Oblique", 8)
         c.drawString(margin, 25, "Generated by AIntelli OCR Guest System")
-        c.drawRightString(w - margin, 25, "Page 1")
+        c.drawRightString(w - margin, 25, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
         c.save()
         return send_file(pdf_path, as_attachment=True)
@@ -919,9 +887,8 @@ def export_pdf():
         traceback.print_exc()
         return json_error("PDF export failed", 500, details=str(e))
 
-
 # -----------------------
-# RECORDS (PDF LIST / VIEW / DOWNLOAD)
+# RECORDS
 # -----------------------
 @app.route("/records")
 def records():
@@ -931,7 +898,6 @@ def records():
     files.sort(reverse=True)
     return render_template("records.html", files=files)
 
-
 @app.route("/view/<path:filename>")
 def view_pdf(filename):
     safe = secure_filename(filename)
@@ -939,14 +905,12 @@ def view_pdf(filename):
         abort(404)
     return send_from_directory(PDF_FOLDER, safe, as_attachment=False)
 
-
 @app.route("/download/<path:filename>")
 def download_pdf(filename):
     safe = secure_filename(filename)
     if not safe.lower().endswith(".pdf"):
         abort(404)
     return send_from_directory(PDF_FOLDER, safe, as_attachment=True)
-
 
 if __name__ == "__main__":
     app.run(debug=True)
