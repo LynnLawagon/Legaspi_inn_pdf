@@ -290,7 +290,7 @@ async function setCameraMode() {
 // =====================
 // APPLY RECORD
 // =====================
-function applyRecordToUI(rec) {
+function applyRecordToUI(rec, { forceAll = false } = {}) {
   if (!rec) return;
 
   currentRefId = rec.Reference_id || currentRefId;
@@ -298,21 +298,23 @@ function applyRecordToUI(rec) {
 
   const guest = rec.Guest || {};
 
-  if (!firstNameInput.value) firstNameInput.value = guest.First_name || "";
-  if (!middleNameInput.value) middleNameInput.value = guest.Middle_name || "";
-  if (!lastNameInput.value) lastNameInput.value = guest.Last_name || "";
-  if (!dobInput.value) dobInput.value = guest.Date_of_birth || "";
+  // ✅ overwrite ALL editable fields when forceAll=true
+  if (forceAll || !firstNameInput.value) firstNameInput.value = guest.First_name || "";
+  if (forceAll || !middleNameInput.value) middleNameInput.value = guest.Middle_name || "";
+  if (forceAll || !lastNameInput.value) lastNameInput.value = guest.Last_name || "";
+  if (forceAll || !dobInput.value) dobInput.value = guest.Date_of_birth || "";
 
-  // ✅ gender now select; try auto-select by OCR
-  if (!genderSelect.value) setGenderByNameIfPossible(guest.Gender || "");
+  // Gender select: clear then re-select based on OCR
+  if (forceAll) genderSelect.value = "";
+  if (forceAll || !genderSelect.value) setGenderByNameIfPossible(guest.Gender || "");
 
-  if (!contactInput.value) contactInput.value = guest.Contact || "";
-  normalizeContactUI(); // enforce digits-only
+  if (forceAll || !contactInput.value) contactInput.value = guest.Contact || "";
+  normalizeContactUI();
 
-  if (!addressInput.value) addressInput.value = guest.Address || "";
+  if (forceAll || !addressInput.value) addressInput.value = guest.Address || "";
 
-  if (!idTypeInput.value) idTypeInput.value = guest.ID_type || "";
-  if (!idNoInput.value) idNoInput.value = guest.ID_no || "";
+  if (forceAll || !idTypeInput.value) idTypeInput.value = guest.ID_type || "";
+  if (forceAll || !idNoInput.value) idNoInput.value = guest.ID_no || "";
 
   ageInput.value =
     guest.Age != null ? String(guest.Age) : computeAge(dobInput.value.trim());
@@ -407,7 +409,7 @@ retryBtn.addEventListener("click", async () => {
       predictedType: lastPredictedType,
     });
 
-    applyRecordToUI(rec);
+    applyRecordToUI(rec, { forceAll: true }); // ✅ overwrite EVERYTHING
     setUploadMode(true);
     setRetryEnabled(true);
   } catch (err) {
@@ -443,9 +445,12 @@ inputFile.addEventListener("change", async () => {
     });
 
     setPreviewSrc(imgSrc, true);
+
+    // ✅ overwrite everything from this scan
+    applyRecordToUI(rec, { forceAll: true });
+
     if (predictedType && !idTypeInput.value) idTypeInput.value = predictedType;
 
-    applyRecordToUI(rec);
     setUploadMode(true);
 
     // Save for retry
@@ -458,7 +463,6 @@ inputFile.addEventListener("change", async () => {
     try { URL.revokeObjectURL(imgSrc); } catch {}
     alert("Error scanning upload: " + err.message);
 
-    // Still allow retry with same file
     lastScanSource = "upload";
     lastScanFile = file;
     lastScanSlot = idSlotSelect.value;
@@ -522,7 +526,7 @@ snapBtn.addEventListener("click", async (e) => {
     setPreviewSrc(URL.createObjectURL(blob), true);
     if (predictedType && !idTypeInput.value) idTypeInput.value = predictedType;
 
-    applyRecordToUI(rec);
+    applyRecordToUI(rec, { forceAll: true });
     setUploadMode(true);
 
     // Save for retry (camera too)

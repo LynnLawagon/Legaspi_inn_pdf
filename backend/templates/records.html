@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Saved Guest PDFs</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='records.css') }}">
+</head>
+<body>
+
+<div class="page">
+  <div class="card">
+    <div class="header">
+      <h1>Saved Guest PDFs</h1>
+      <p class="sub">Your exported guest PDF files are listed here.</p>
+    </div>
+
+    {% if files and files|length > 0 %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Reference ID</th>
+              <th class="col-actions">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for file in files %}
+              <tr>
+                <td class="ref">{{ file.replace(".pdf","") }}</td>
+                <td class="actions">
+                  <a class="btn btn-ghost" href="{{ url_for('view_pdf', filename=file) }}" target="_blank">View</a>
+                  <a class="btn btn-primary" href="{{ url_for('download_pdf', filename=file) }}">Download</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty">
+        <div class="empty-title">No PDFs saved yet</div>
+        <div class="empty-sub">Export a guest record first, then it will appear here.</div>
+      </div>
+    {% endif %}
+
+    <div class="footer">
+      <a class="btn btn-primary" href="/scan-page">Back to Scanner</a>
+      <a class="btn btn-ghost" href="/">Back to Home</a>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

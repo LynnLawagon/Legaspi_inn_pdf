@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, render_template, send_file
+# app.py
+from flask import Flask, request, jsonify, render_template, send_file, send_from_directory, abort
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
 
@@ -12,17 +13,20 @@ import numpy as np
 from datetime import datetime, date
 import easyocr
 
+
 # -----------------------
 # FLASK
 # -----------------------
+# NOTE: Your structure is backend/app.py, backend/templates, backend/static
 app = Flask(__name__, template_folder="templates")
+
 
 # -----------------------
 # COMPANY INFO
 # -----------------------
 COMPANY_ADDRESS = "115 Pelayo St, Poblacion District, Davao City, 8000 Davao del Sur"
 COMPANY_NUMBER = "936 456 8920"
-LOGO_REL_PATH = "img/logo.png"  # static/img/logo.png
+LOGO_REL_PATH = "img/logo.png"  # backend/static/img/logo.png
 
 PDF_FOLDER = os.path.join(app.root_path, "static", "PDFs")
 UPLOAD_FOLDER = os.path.join(app.root_path, "static", "uploads")
@@ -31,6 +35,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
+
 # -----------------------
 # OCR (cached)
 # -----------------------
@@ -38,12 +43,13 @@ reader = None
 def get_reader():
     global reader
     if reader is None:
-        # Filipino + English helps PhilID labels; remove "tl" if you want faster
         reader = easyocr.Reader(["en", "tl"], gpu=False)
     return reader
 
-# in-memory records
+
+# in-memory records (per server run)
 RECORDS = {}
+
 
 # -----------------------
 # ROUTES (PAGES)
@@ -52,9 +58,11 @@ RECORDS = {}
 def home():
     return render_template("landing.html")
 
+
 @app.route("/scan-page")
 def scan_page():
     return render_template("index.html")
+
 
 # database connection test route
 @app.route("/test-db")
@@ -69,6 +77,7 @@ def test_db():
         return jsonify({"ok": True, "data": data})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
 
 # ✅ genders list from tbl_gender (for dropdown)
 @app.route("/meta/genders", methods=["GET"])
@@ -85,6 +94,7 @@ def meta_genders():
         traceback.print_exc()
         return jsonify({"error": "Failed to load genders", "details": str(e)}), 500
 
+
 # -----------------------
 # HELPERS
 # -----------------------
@@ -93,13 +103,14 @@ def json_error(msg, code=400, **extra):
     payload.update(extra)
     return jsonify(payload), code
 
+
 def normalize_contact(contact: str) -> str:
-    # keep digits only
     return re.sub(r"\D", "", contact or "")
 
+
 def is_valid_contact_11(contact: str) -> bool:
-    # exactly 11 digits
-    return bool(re.fullmatch(r"\d{11}", contact or ""))  # for PH mobile strict: r"09\d{9}"
+    return bool(re.fullmatch(r"\d{11}", contact or ""))
+
 
 def gender_exists(gender_id):
     """Return {Gender_id, gender_name} if exists else None."""
@@ -117,8 +128,10 @@ def gender_exists(gender_id):
     conn.close()
     return row
 
+
 def generate_reference_id():
     return f"REF-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}"
+
 
 def compute_age(dob_str: str):
     if not dob_str:
@@ -131,17 +144,18 @@ def compute_age(dob_str: str):
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     return age if 0 <= age <= 130 else None
 
+
 def safe_resize(img, target_w=900):
-    """smaller width = faster OCR, good for camera"""
     h, w = img.shape[:2]
     if w <= target_w:
         return img
     scale = target_w / float(w)
     return cv2.resize(img, (target_w, int(h * scale)))
 
+
 def pdf_first_page_to_bgr(pdf_path):
     try:
-        import fitz
+        import fitz  # PyMuPDF
     except Exception:
         return None, "PyMuPDF not installed. Install: pip install pymupdf"
     try:
@@ -157,6 +171,7 @@ def pdf_first_page_to_bgr(pdf_path):
     except Exception as e:
         return None, f"PDF render failed: {e}"
 
+
 PRIMARY_KEYWORDS = [
     "PHILIPPINE IDENTIFICATION", "PHILIPPINE IDENTIFICATION CARD",
     "PHILSYS", "NATIONAL ID",
@@ -166,6 +181,7 @@ SECONDARY_KEYWORDS = [
     "BIRTH CERTIFICATE", "PSA",
     "BARANGAY", "CLEARANCE",
 ]
+
 
 def guess_id_category(full_text_upper: str) -> str:
     t = (full_text_upper or "").upper()
@@ -177,6 +193,7 @@ def guess_id_category(full_text_upper: str) -> str:
         return "Primary"
     return "Unknown"
 
+
 def can_proceed(record: dict) -> bool:
     cat = (record.get("ID_category") or "Unknown").strip()
     if cat == "Primary":
@@ -185,8 +202,9 @@ def can_proceed(record: dict) -> bool:
         return len(record.get("Secondary_ids", [])) >= 2
     return False
 
+
 # -----------------------
-# OCR + PARSING (FAST + BETTER NAMES)
+# OCR + PARSING
 # -----------------------
 STOPWORDS = {
     "REPUBLIC", "PHILIPPINES", "PHILIPPINE", "IDENTIFICATION", "CARD", "NATIONAL", "ID",
@@ -199,6 +217,7 @@ STOPWORDS = {
     "VALIDITY", "TERM", "SY", "GRADE", "SECTION", "LRN",
 }
 
+
 def preprocess(img_bgr):
     img_bgr = safe_resize(img_bgr, target_w=900)
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
@@ -210,6 +229,7 @@ def preprocess(img_bgr):
         31, 9
     )
     return gray, thr
+
 
 def ocr_items(img):
     r = get_reader()
@@ -248,6 +268,7 @@ def ocr_items(img):
     items.sort(key=lambda x: x["cy"])
     return items, " ".join(full)
 
+
 def clean_name(s: str) -> str:
     s = (s or "").upper()
     s = re.sub(r"[^A-Z\s\-\.]", " ", s)
@@ -261,6 +282,7 @@ def clean_name(s: str) -> str:
             continue
         toks.append(t2)
     return " ".join(toks).strip()
+
 
 def looks_like_name(s: str) -> bool:
     if not s:
@@ -276,6 +298,7 @@ def looks_like_name(s: str) -> bool:
         return False
     return True
 
+
 def get_value_near_label(items, label_variants, max_lines_ahead=8):
     texts = [x["text"] for x in items]
     for i, t in enumerate(texts):
@@ -289,18 +312,17 @@ def get_value_near_label(items, label_variants, max_lines_ahead=8):
         if not hit:
             continue
 
-        # SAME LINE value (PhilID OCR often merges label+value)
         after = tt.split(hit, 1)[-1].strip()
         after = clean_name(after)
         if looks_like_name(after):
             return after
 
-        # NEXT LINE value
         for j in range(i + 1, min(i + 1 + max_lines_ahead, len(texts))):
             cand = clean_name(texts[j])
             if looks_like_name(cand):
                 return cand
     return ""
+
 
 def extract_school_fullname(items):
     cands = []
@@ -318,6 +340,7 @@ def extract_school_fullname(items):
         cands.append((it["cy"], s))
     cands.sort(key=lambda x: x[0], reverse=True)
     return cands[0][1] if cands else ""
+
 
 def extract_names(items, full_text):
     last = get_value_near_label(items, ["APELYIDO", "LAST NAME", "SURNAME"])
@@ -346,6 +369,7 @@ def extract_names(items, full_text):
 
     return first, middle, last
 
+
 def extract_id_number(full_text_upper: str):
     t = full_text_upper or ""
     m = re.search(r"\b\d{4}-\d{4}-\d{4}-\d{4}\b", t)
@@ -359,8 +383,10 @@ def extract_id_number(full_text_upper: str):
         return m3.group(0)
     return ""
 
+
 def extract_dob(full_text):
     full_text = (full_text or "").upper()
+
     m1 = re.search(
         r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{1,2}\s+\d{4}",
         full_text
@@ -391,6 +417,7 @@ def extract_dob(full_text):
 
     return ""
 
+
 def extract_address(full_text):
     t = (full_text or "").upper()
     m = re.search(r"(TIRAHAN|ADDRESS)\s*[:\-]?\s*(.+)", t)
@@ -401,10 +428,12 @@ def extract_address(full_text):
         return m2.group(0).strip()
     return ""
 
+
 def extract_gender(full_text):
     t = (full_text or "").upper()
     m = re.search(r"\b(SEX|GENDER)\b\s*[:\-]?\s*([A-Z])\b", t)
     return m.group(2) if m else ""
+
 
 def crop_roi(img, x1, y1, x2, y2):
     h, w = img.shape[:2]
@@ -414,10 +443,10 @@ def crop_roi(img, x1, y1, x2, y2):
         return None
     return img[y1:y2, x1:x2]
 
+
 def parse_fields_from_image(img_bgr):
     gray, _thr = preprocess(img_bgr)
 
-    # OCR only important zones (FAST)
     roi_idno   = crop_roi(gray, 0.02, 0.18, 0.55, 0.33)
     roi_names  = crop_roi(gray, 0.52, 0.30, 0.98, 0.78)
     roi_addr   = crop_roi(gray, 0.02, 0.76, 0.75, 0.98)
@@ -445,12 +474,13 @@ def parse_fields_from_image(img_bgr):
         "Middle_name": middle,
         "Last_name": last,
         "Date_of_birth": dob,
-        "Gender": gender,     # OCR may output "M"/"F" but DB save uses Gender_id from dropdown
+        "Gender": gender,
         "Contact": "",
         "Address": address,
         "ID_no": id_no,
         "__full_text": full_text,
     }, None
+
 
 # -----------------------
 # ERROR HANDLER
@@ -463,6 +493,7 @@ def handle_exception(e):
         traceback.print_exc()
         return json_error("Server error", 500, details=str(e))
     raise e
+
 
 # -----------------------
 # RECORD MANAGEMENT
@@ -491,6 +522,7 @@ def ensure_record(ref: str):
             "Can_proceed": False
         }
     return RECORDS[ref]
+
 
 def merge_extracted_into_record(extracted: dict, ref: str, slot: str, predicted_id_type: str = ""):
     record = ensure_record(ref)
@@ -526,6 +558,7 @@ def merge_extracted_into_record(extracted: dict, ref: str, slot: str, predicted_
     record["Can_proceed"] = can_proceed(record)
     return record
 
+
 def apply_manual_overrides(record: dict, payload: dict):
     g = record.get("Guest", {})
 
@@ -538,12 +571,13 @@ def apply_manual_overrides(record: dict, payload: dict):
         v = pick(k)
         if v is not None:
             if k == "Contact":
-                v = normalize_contact(v)  # digits only
+                v = normalize_contact(v)
             g[k] = v
 
     g["Age"] = compute_age(g.get("Date_of_birth") or "")
     record["Guest"] = g
     record["Can_proceed"] = can_proceed(record)
+
 
 # -----------------------
 # RESET
@@ -557,8 +591,9 @@ def reset_record():
     RECORDS.pop(ref, None)
     return jsonify({"ok": True}), 200
 
+
 # -----------------------
-# UPLOAD (optimized: decode in-memory first)
+# UPLOAD
 # -----------------------
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -599,7 +634,6 @@ def upload():
         if not data:
             return json_error("Empty file", 400)
 
-        # Decode in-memory
         if ext == ".pdf":
             unique = f"upload_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}_{filename}"
             saved_path = os.path.join(UPLOAD_FOLDER, unique)
@@ -613,7 +647,6 @@ def upload():
                 return json_error("Could not read PDF", 400)
 
             img_path_db = f"uploads/{unique}"
-
         else:
             nparr = np.frombuffer(data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -639,6 +672,7 @@ def upload():
         traceback.print_exc()
         return json_error("Server error while scanning", 500, details=str(e))
 
+
 # -----------------------
 # SAVE GUEST (DB)
 # -----------------------
@@ -655,27 +689,22 @@ def save_guest():
         if not record:
             return json_error("No record found for that Reference ID.", 404)
 
-        # apply manual form edits
         apply_manual_overrides(record, payload)
         guest = record.get("Guest") or {}
 
-        # ✅ CONTACT: digits-only + must be EXACT 11 digits
         contact = normalize_contact(guest.get("Contact", ""))
         if contact and not is_valid_contact_11(contact):
             return json_error("Contact must be exactly 11 digits.", 400)
         guest["Contact"] = contact
 
-        # ✅ GENDER: must come from tbl_gender via Gender_id
         gender_id = payload.get("Gender_id")
         row = gender_exists(gender_id)
         if not row:
             return json_error("Please select Gender from the list.", 400)
 
-        # store readable gender name for PDF display
         guest["Gender"] = row["gender_name"]
         record["Guest"] = guest
 
-        # choose image path
         img_rel = ""
         if record.get("Primary_id") and record["Primary_id"].get("Img_path"):
             img_rel = record["Primary_id"]["Img_path"]
@@ -715,15 +744,12 @@ def save_guest():
         cur.close()
         conn.close()
 
-        return jsonify({
-            "ok": True,
-            "saved_id": new_id,
-            "reference_id": ref
-        }), 200
+        return jsonify({"ok": True, "saved_id": new_id, "reference_id": ref}), 200
 
     except Exception as e:
         traceback.print_exc()
         return json_error("DB save failed", 500, details=str(e))
+
 
 # -----------------------
 # PDF EXPORT
@@ -749,6 +775,7 @@ def wrap_text_by_width(c, text, max_width, font_name="Helvetica", font_size=11):
     if cur:
         lines.append(cur)
     return lines
+
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
@@ -891,6 +918,35 @@ def export_pdf():
     except Exception as e:
         traceback.print_exc()
         return json_error("PDF export failed", 500, details=str(e))
+
+
+# -----------------------
+# RECORDS (PDF LIST / VIEW / DOWNLOAD)
+# -----------------------
+@app.route("/records")
+def records():
+    files = []
+    if os.path.exists(PDF_FOLDER):
+        files = [f for f in os.listdir(PDF_FOLDER) if f.lower().endswith(".pdf")]
+    files.sort(reverse=True)
+    return render_template("records.html", files=files)
+
+
+@app.route("/view/<path:filename>")
+def view_pdf(filename):
+    safe = secure_filename(filename)
+    if not safe.lower().endswith(".pdf"):
+        abort(404)
+    return send_from_directory(PDF_FOLDER, safe, as_attachment=False)
+
+
+@app.route("/download/<path:filename>")
+def download_pdf(filename):
+    safe = secure_filename(filename)
+    if not safe.lower().endswith(".pdf"):
+        abort(404)
+    return send_from_directory(PDF_FOLDER, safe, as_attachment=True)
+
 
 if __name__ == "__main__":
     app.run(debug=True)

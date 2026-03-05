@@ -1,3 +1,4 @@
+<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,7 +29,16 @@
       <span>Supports School ID / National ID (Primary) and Birth Certification / Barangay Clearance (Secondary)</span>
     </div>
 
-    <button id="back-home-btn" class="back-home-btn">Back to Home</button>
+    <!-- ✅ FIXED: aligned buttons -->
+    <div class="top-actions">
+      <button class="records-btn" type="button" onclick="window.location.href='/records'">
+        View Saved PDFs
+      </button>
+
+      <button id="back-home-btn" class="back-home-btn" type="button" onclick="window.location.href='/'">
+        Back to Home
+      </button>
+    </div>
   </div>
 
   <div id="ocr-results">
