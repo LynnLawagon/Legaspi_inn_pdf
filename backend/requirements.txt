@@ -8,5 +8,5 @@ pymupdf
 supabase
 python-dotenv
 gunicorn
-torch==2.5.1
-torchvision==0.20.1
+torch
+torchvision
