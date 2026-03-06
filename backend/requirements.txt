@@ -3,7 +3,7 @@ easyocr
 opencv-python-headless
 numpy
 reportlab
-pillow<10
+pillow
 pymupdf
 supabase
 python-dotenv
