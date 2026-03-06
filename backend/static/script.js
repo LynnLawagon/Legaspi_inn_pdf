@@ -1,4 +1,4 @@
-// static/script.js (FULL) - shows DB error details + sends reference_id correctly
+
 const imgView = document.getElementById("img-view");
 const toggleBtn = document.getElementById("toggle-btn");
 const recalcBtn = document.getElementById("recalc-btn");
@@ -486,6 +486,9 @@ exportBtn.addEventListener("click", async () => {
     return;
   }
 
+  const selectedGenderName =
+  genderSelect.options[genderSelect.selectedIndex]?.textContent || "";
+
   const payload = {
     reference_id: currentRefId || refIdInput.value,
     ID_type: idTypeInput.value.trim(),
@@ -495,6 +498,7 @@ exportBtn.addEventListener("click", async () => {
     Last_name: lastNameInput.value.trim(),
     Date_of_birth: dobInput.value.trim(),
     Gender_id: Number(genderSelect.value),
+    gender_name: selectedGenderName,
     Contact: contactInput.value.trim(),
     Address: addressInput.value.trim(),
   };

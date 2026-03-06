@@ -5,3 +5,5 @@ numpy
 reportlab
 pillow<10
 pymupdf
+supabase
+python-dotenv

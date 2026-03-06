@@ -1,9 +1,21 @@
-import mysql.connector
+# db.py
+import os
+from supabase import create_client, Client
 
-def get_conn():
-    return mysql.connector.connect(
-        host="127.0.0.1",
-        user="root",
-        password="",
-        database="db_ocr_results"
-    )
+
+_supabase = None
+
+
+def get_supabase() -> Client:
+    global _supabase
+
+    if _supabase is None:
+        supabase_url = os.getenv("SUPABASE_URL", "").strip()
+        supabase_key = os.getenv("SUPABASE_KEY", "").strip()
+
+        if not supabase_url or not supabase_key:
+            raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY in .env")
+
+        _supabase = create_client(supabase_url, supabase_key)
+
+    return _supabase

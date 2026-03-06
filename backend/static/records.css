@@ -1,6 +1,4 @@
-/* ==============================
-   MATCH SYSTEM THEME (Scanner Page)
-============================== */
+
 *{
   margin:0;
   padding:0;
@@ -13,7 +11,6 @@ body{
   color:#30062c;
 }
 
-/* page wrapper */
 .page{
   min-height:100vh;
   padding:40px 24px;
@@ -22,7 +19,6 @@ body{
   align-items:flex-start;
 }
 
-/* main card */
 .card{
   width:100%;
   max-width:980px;
@@ -32,7 +28,6 @@ body{
   padding:26px;
 }
 
-/* header */
 .header{
   margin-bottom:18px;
 }
@@ -49,7 +44,6 @@ h1{
   opacity:0.85;
 }
 
-/* table */
 .table-wrap{
   margin-top:14px;
   border:1px solid rgba(0,0,0,0.08);
@@ -89,7 +83,6 @@ tbody tr:hover{
   font-weight:800;
 }
 
-/* buttons */
 .actions{
   display:flex;
   gap:10px;
@@ -133,7 +126,6 @@ tbody tr:hover{
   background:#ecd8bf;
 }
 
-/* empty state */
 .empty{
   margin-top:14px;
   border:1px dashed rgba(44, 7, 53, 0.25);
@@ -154,7 +146,6 @@ tbody tr:hover{
   opacity:0.85;
 }
 
-/* footer */
 .footer{
   margin-top:18px;
   display:flex;
@@ -163,7 +154,6 @@ tbody tr:hover{
   flex-wrap:wrap;
 }
 
-/* responsive */
 @media (max-width:640px){
   .col-actions{ width:auto; }
   .actions{ flex-direction:column; align-items:stretch; }

@@ -16,10 +16,9 @@ body{
   font-family:"Poppins", system-ui, Arial, sans-serif;
   background:var(--bg);
   color:var(--ink);
-  overflow-x:hidden; /* ✅ prevents horizontal scrollbar */
+  overflow-x:hidden; 
 }
 
-/* NAV */
 .nav{
   position:sticky;
   top:0;
@@ -56,7 +55,6 @@ body{
   font-weight:700 !important;
 }
 
-/* Hamburger button (hidden on desktop) */
 .nav-toggle{
   display:none;
   width:44px;
@@ -78,7 +76,6 @@ body{
   transition:.25s ease;
 }
 
-/* Mobile nav behavior */
 @media (max-width: 980px){
   .nav-inner{ position:relative; }
 
@@ -126,7 +123,6 @@ body{
   }
 }
 
-/* HERO */
 .hero{
   padding:110px 24px 90px;
 }
@@ -158,7 +154,6 @@ body{
   font-size:16px;
 }
 
-/* SECTIONS */
 .section{ padding:90px 24px; }
 
 .section-inner{
@@ -180,7 +175,6 @@ body{
   text-align:justify;
 }
 
-/* ABOUT / HISTORY */
 .two-col{
   display:grid;
   grid-template-columns: 1fr 1.4fr;
@@ -193,7 +187,6 @@ body{
   margin-top:8px;
 }
 
-/* HOW STEPS */
 .steps-grid{
   margin-top:60px;
   max-width:1100px;
@@ -201,13 +194,13 @@ body{
   margin-right:auto;
 
   display:grid;
-  grid-template-columns: repeat(6, 1fr);  /* ✅ 6-column grid */
+  grid-template-columns: repeat(6, 1fr); 
   gap:40px;
   align-items:stretch;
 }
 
 .step-card{
-  grid-column: span 2; /* ✅ default: 3 cards per row (2+2+2 = 6) */
+  grid-column: span 2; 
 
   width:100%;
   padding:26px 22px;
@@ -237,15 +230,13 @@ body{
   line-height:1.5;
 }
 
-/* ✅ Center the 2 cards on row 2 exactly like your 1st pic */
 .steps-grid > .step-card:nth-child(4){
-  grid-column: 2 / span 2; /* occupies col 2-3 */
+  grid-column: 2 / span 2; 
 }
 .steps-grid > .step-card:nth-child(5){
-  grid-column: 4 / span 2; /* occupies col 4-5 */
+  grid-column: 4 / span 2; 
 }
 
-/* SUPPORT */
 .support-grid{
   display:grid;
   grid-template-columns: 1.2fr 1fr;
@@ -270,7 +261,6 @@ body{
   line-height:1.1;
 }
 
-/* numbered list */
 .support-list{
   counter-reset:item;
   list-style:none;
@@ -306,7 +296,6 @@ body{
   flex-shrink:0;
 }
 
-/* CONTACT */
 .contact-grid{
   display:grid;
   grid-template-columns: 1fr 1fr;
@@ -332,25 +321,23 @@ body{
   object-fit:contain;
 }
 
-/* ✅ FOOTER (full width, no horizontal scroll) */
 .footer{
   background:var(--purple);
   color:#FFF4E6;
   text-align:center;
   padding:22px 16px;
   font-weight:600;
-  width:100%;       /* ✅ full width without 100vw */
-  margin:0;         /* ✅ no weird shifting */
+  width:100%;     
+  margin:0;         
 }
 
-/* RESPONSIVE */
 @media (max-width: 980px){
   .two-col{grid-template-columns:1fr}
   .support-grid{grid-template-columns:1fr}
   .contact-grid{grid-template-columns:1fr}
 
   .steps-grid{
-    grid-template-columns: 1fr; /* ✅ 1 column mobile */
+    grid-template-columns: 1fr; 
     gap:18px;
   }
 
@@ -361,18 +348,17 @@ body{
 
 @media (max-width: 980px){
   .steps-grid{
-    grid-template-columns: 1fr;   /* 1 column */
+    grid-template-columns: 1fr;  
     gap:18px;
-    padding: 0 8px;              /* gamay padding para dili hugot sa edges */
+    padding: 0 8px;              
   }
 
-  /* IMPORTANT: remove any grid positioning/spans */
   .steps-grid > .step-card{
     grid-column: auto !important;
     width: 100%;
-    max-width: 520px;            /* optional: para dili super lapad */
-    margin: 0 auto;              /* center */
-    padding: 20px 18px;          /* less tall */
+    max-width: 520px;           
+    margin: 0 auto;              
+    padding: 20px 18px;         
   }
 
   .step-icon{
