@@ -1,0 +1,9 @@
+Note on System Deployment and Limitations
+
+The AIntelli – AI Intelligence Inn system uses Supabase as its database to store guest information and extracted data from identification cards. 
+
+For deployment, the project uses a paid Railway hosting service instead of Vercel. This decision was made because the project requires larger storage space and higher build capacity due to heavy dependencies such as OCR libraries and machine learning models. Vercel has limitations on build size and server resources, which made it difficult to deploy the full application. Railway provided a more suitable environment to run the OCR processing and AI classification features of the system.
+
+It is also important to note that the accuracy of the scan page may vary depending on the quality of the uploaded image. Factors such as image size, lighting, color contrast, camera angle, and resolution can affect the OCR’s ability to correctly detect and extract text from identification cards. If the results are not fully accurate, users may need to upload a clearer image or adjust the photo conditions to improve recognition accuracy.
+
+The limited number of ID images used to train the teachable machine model was also a limitation of the system. There was not enough dataset to train the model and may not perfectly recognize all types of IDs or files.
